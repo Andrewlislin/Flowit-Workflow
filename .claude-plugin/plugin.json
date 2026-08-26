@@ -1,0 +1,10 @@
+{
+  "name": "flowit-workflow",
+  "description": "Cross-session orchestration, durable scheduling, Skill binding, and context flow for Claude Code.",
+  "version": "0.2.0",
+  "author": {
+    "name": "CoaseEdge"
+  },
+  "repository": "https://github.com/Andrewlislin/Flowit-Workflow",
+  "license": "MIT"
+}

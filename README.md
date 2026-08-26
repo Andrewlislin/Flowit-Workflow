@@ -1,175 +1,194 @@
-# Flowit Workflow for DeepSeek Harness
+# Flowit Workflow
 
-A DeepSeek Harness plugin bundle that adds four orchestration primitives without importing Flowit Desktop or Flowit Runtime:
+**Flowit Workflow is an agent-agnostic orchestration layer for long-lived Agent sessions.**
 
-- **Cross-session orchestration** — dispatch work to another DSH Session, resuming cold Sessions through `ctx.agents.resume()` when needed.
-- **Durable scheduling** — persist one-shot/fixed-rate tasks in `.dsh/flowit-workflow.json` and wake the target Session when due.
-- **Skill binding** — resolve Skill bodies at execution time against the target Agent's `cwd` and Agent scope; task definitions store names, not copied Skill text.
-- **Context flow** — use DSH's canonical `dsh-session:` references so another Session enters as a bounded, read-only snapshot rather than copied transcript text.
+It adds four reusable primitives:
 
-The implementation targets DeepSeek Harness `0.1.1-rc.2` seams: `ctx.agents`, `ctx.skills`, `ctx.sessionReferenceResolver`, `ctx.tools`, `session/event`, `Agent.followup()`, `Agent.inject()`, and session persistence.
+- **Durable Schedule Engine** — run a task later or on a fixed cadence.
+- **Pipeline / Work Graph** — move work across sessions in a DAG.
+- **Skill Binding** — resolve named Skills at execution time in the target Agent.
+- **Context Graph** — pass bounded/read-only context references between sessions.
+
+DeepSeek Harness is the first reference adapter. **Claude Code is the first cross-Agent pilot.** Future hosts attach through the same `AgentAdapter` contract rather than changing the Core.
 
 ## Architecture
 
 ```text
-                         @coaseedge/dsh-flowit-workflow
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    │                 │                 │
-              DurableScheduler   PipelineRuntime   DshTargetDispatcher
-                    │                 │                 │
-             JSON durable state  session/event     ctx.agents
-                    │             turn/end          ctx.skills
-                    │                 │             session-reference
-                    └──────────────┬──┴─────────────────┘
-                                   │
-                             target DSH Session
+                         Flowit Orchestration Core
+                                  │
+        ┌─────────────────────────┼─────────────────────────┐
+        │                         │                         │
+ Schedule Engine            Pipeline Graph             Context Graph
+        │                         │                         │
+        └────────────────── Skill Binding ─────────────────┘
+                                  │
+                         AgentAdapter contract
+                                  │
+        ┌─────────────────────────┴─────────────────────────┐
+        │                                                   │
+ DeepSeek Harness                                      Claude Code
+ native session/Skill/reference                  Hooks + MCP + Skills
+                                                       + --resume
 ```
 
-The first release deliberately keeps orchestration state outside the DSH transcript. DSH remains the authority for Session history; this plugin owns only automation definitions and run audit records.
+See [architecture](docs/architecture.md), [Adapter contract](docs/adapter-contract.md), and [Claude Code pilot](docs/claude-code-pilot.md).
 
-## Install
+## Core model
 
-After publishing:
+A scheduled task or Pipeline node stores only orchestration references:
 
-```bash
-pnpm add @coaseedge/dsh-flowit-workflow
-```
-
-For development from this repository, use it as a local or Git dependency. The package has a `prepare` script that builds TypeScript before Git-package installation.
-
-## Cordis / DSH wiring
-
-Load the package after the DSH services it uses (`agents`, `tools`, `skills`, `sessionReferenceResolver`, `sessionPersistence`). A representative plugin config is:
-
-```yaml
-plugins:
-  "@coaseedge/dsh-flowit-workflow":
-    storageFile: ".dsh/flowit-workflow.json"
-    minimumIntervalSeconds: 60
-    allowModelMutations: false
-```
-
-`allowModelMutations` defaults to **false**. When false, the plugin exposes read-only list/context-discovery tools but does not let the model create future autonomous work. Enable it only in a deployment where DSH's tool approval/policy layer explicitly covers these mutation tools.
-
-## Model-facing tools
-
-Read-only tools are always registered:
-
-- `flowit_schedule_list`
-- `flowit_pipeline_list`
-- `flowit_context_candidates`
-
-When `allowModelMutations: true`:
-
-- `flowit_dispatch_session` — immediate cross-session dispatch with Skill + context bindings.
-- `flowit_schedule_create` / `flowit_schedule_cancel` — durable background tasks.
-- `flowit_pipeline_create_linear` — create the common A → B → C pipeline. Each downstream node receives the upstream Session as a DSH session-reference.
-- `flowit_pipeline_run` — manual execution.
-
-Programmatic DSH plugins can inject `flowitWorkflow` and call `ctx.flowitWorkflow.scheduler` / `ctx.flowitWorkflow.pipelines`; standalone callers can also use the exported runtime/classes to create arbitrary DAG pipelines; the model-facing first version exposes a linear builder to keep schemas and review simple.
-
-## How Skill binding works
-
-A definition persists only names:
-
-```json
+```ts
 {
-  "skills": ["industry-research", "wechat-writer"]
-}
-```
-
-At execution time the dispatcher resolves each Skill with the target Agent's current `cwd` and Agent scope, checks that it is model-invocable, then injects the canonical DSH `renderSkillContent()` output. Skill updates therefore apply to future runs without rewriting schedules/pipelines.
-
-## How context flow works
-
-A task stores Session references:
-
-```json
-{
-  "contextRefs": [
-    { "sessionId": "industry-research", "label": "AI industry research" }
+  adapterId: 'claude-code',
+  sessionId: '...',
+  prompt: 'Review yesterday\'s changes',
+  skills: ['code-review'],
+  contextRefs: [
+    { adapterId: 'claude-code', sessionId: 'research-session' }
   ]
 }
 ```
 
-The dispatcher formats canonical `dsh-session:` mentions into the direct user follow-up. DSH's `session-reference` plugin resolves those mentions during `agent/pre-step` into its bounded, immutable read-only snapshots.
+Skill bodies and complete transcripts are not copied into Flowit Workflow. The target adapter resolves them when work actually runs.
 
-For GUI interaction, a later client plugin can map drag/drop to the exact same representation:
+## Claude Code pilot
 
-```text
-Drag Session A → Composer / Pipeline node
-              ↓
-formatSessionReferenceMention(...)
-              ↓
-canonical dsh-session reference
-```
-
-The transport semantic is therefore independent of whether the UI uses drag/drop, `@Session` autocomplete, a context chip, or a pipeline editor.
-
-## Pipeline semantics
-
-A pipeline is a DAG. V0.1 executes nodes in deterministic topological order. For each node:
-
-1. Resolve/resume the target Session.
-2. Load bound Skills against that Session.
-3. Add declared context references.
-4. Add predecessor Sessions as read-only context when `inheritUpstreamContext=true`.
-5. `followup()` the task and wait for `agent.whenIdle()`.
-6. Continue to the next node.
-
-A pipeline may be manual or triggered by a successful `turn/end` on a source Session. Node DAG cycles are rejected, and event-triggered pipelines are additionally checked as one global Session-level trigger graph, preventing A ↔ B loops assembled across multiple pipelines.
-
-## Scheduling semantics
-
-- `at`: one-shot future ISO timestamp.
-- `every`: fixed interval, minimum 60 seconds by default.
-- Missed fixed-rate intervals collapse to the next future occurrence; the scheduler does not replay a catch-up storm.
-- The DSH host process must be running. This plugin can resume a cold Session, but it is not an OS-level daemon that starts DeepSeek Harness itself.
-
-## Persistence
-
-Default file:
+The repository itself is a Claude Code plugin root:
 
 ```text
-.dsh/flowit-workflow.json
+.claude-plugin/plugin.json
+hooks/hooks.json
+.mcp.json
+skills/
+  run-bound/SKILL.md
+  orchestrate/SKILL.md
 ```
 
-Writes use temp-file + rename and mutations are serialized. The file contains:
+Claude Code officially loads these plugin components from the plugin root. Build the TypeScript runtime first:
+
+```bash
+npm install
+npm run build
+claude --plugin-dir .
+```
+
+The Hooks capture Session lifecycle and completion facts. The MCP server provides the orchestration control plane. Cold-session execution uses the public Claude CLI resume path.
+
+### Try it
+
+1. Start one or more Claude Code sessions with this plugin enabled so their session ids are captured.
+2. Run `/flowit-workflow:orchestrate` and list sessions.
+3. For mutation testing, explicitly opt in:
+
+```bash
+FLOWIT_WORKFLOW_CLAUDE_MUTATIONS=1 claude --plugin-dir .
+```
+
+4. Start the durable worker if schedules/event pipelines must outlive the current session:
+
+```bash
+node dist/cli.js claude-daemon --detach
+```
+
+### Claude safety defaults
+
+- MCP mutation tools are **not exposed by default**.
+- External dispatch to a Claude session still marked `live` is rejected by default.
+- Cross-session summaries are read-only context and never permission/consent.
+- A dispatched run must return a schema-valid Skill-binding result; missing requested Skills fail the node.
+- Cross-adapter context currently fails closed.
+
+## DeepSeek Harness adapter
+
+The existing DSH implementation remains available as a host adapter and plugin subpath:
+
+```ts
+import * as flowitWorkflow from '@coaseedge/flowit-workflow/dsh'
+```
+
+It keeps the stronger native behavior:
+
+- live Agent lookup / cold `ctx.agents.resume()`;
+- target-cwd + Agent-scope `ctx.skills` resolution;
+- immutable `dsh-session:` context references;
+- DSH Session event triggers.
+
+The general package root does not import DSH at module-load time; DSH dependencies are optional peers for non-DSH consumers.
+
+## Durable state
+
+Core state defaults to `.flowit-workflow/workflow.json` for embedded runtimes. Claude uses a user-level runtime directory:
 
 ```text
-version
-schedules[]
-pipelines[]
-runs[]
+~/.flowit-workflow/claude/
+  workflow.json
+  sessions.json
+  events.jsonl
+  events.cursor
+  daemon.pid
 ```
 
-Run history is bounded (`maxRunHistory`, default 500).
+The Workflow store uses an inter-process lock plus atomic rename because Claude plugin MCP servers and the detached daemon can run as separate processes.
 
-## Safety boundary
+## Core API
 
-Future autonomous execution is more sensitive than an ordinary one-turn tool call. V0.1 therefore uses three constraints:
+```ts
+import {
+  FlowitOrchestrationCore,
+  type AgentAdapter,
+} from '@coaseedge/flowit-workflow/core'
 
-1. Model mutation tools are opt-in (`allowModelMutations=false` by default).
-2. Pipeline graphs are acyclic.
-3. Session context is DSH read-only session-reference data; referenced content cannot directly become an authorization source.
+const core = new FlowitOrchestrationCore({
+  defaultAdapterId: 'my-agent',
+  storageFile: '.flowit-workflow/workflow.json',
+}, [myAdapter])
+```
 
-A production UI should add an explicit human confirmation record for background Autopilot-style tasks if the deployment intends to grant stronger-than-normal tool authority. Do not treat generic prior `write` approval as consent for recurring autonomous work.
+Important services:
+
+```text
+core.adapters
+core.dispatcher
+core.scheduler
+core.pipelines
+core.contextGraph
+core.skillBinder
+```
+
+## Adding another Agent
+
+Implement `AgentAdapter` under `src/adapters/`:
+
+```ts
+interface AgentAdapter {
+  id: string
+  capabilities: AgentAdapterCapabilities
+  listSessions(query?: string, signal?: AbortSignal): Promise<AgentSessionDescriptor[]>
+  dispatch(request: AgentDispatchRequest, signal?: AbortSignal): Promise<AgentDispatchResult>
+  subscribe?(listener: (event: AgentEvent) => Promise<void> | void): () => void
+}
+```
+
+The next planned adapters can be Gemini CLI, OpenHands, OpenCode, WorkBuddy, Cursor, and Codex. The Core should not gain imports from those hosts.
 
 ## Development
 
 ```bash
-pnpm install
-pnpm check
-pnpm build
+npm run typecheck
+npm test
+npm run build
 ```
 
-Pure domain/store tests do not require a running DSH host. Integration tests against a real Harness composition are the next milestone.
+CI runs the same check/build sequence. If GitHub reports a job with zero executed steps, treat that as runner infrastructure failure rather than code validation.
 
 ## Current limitations
 
-- No visual DSH Web Client drag/drop adapter yet; native `@Session`/session-reference semantics are already used underneath.
-- Pipeline execution is deterministic sequential DAG execution; parallel fan-out/join is deferred.
-- The host process must stay alive for timers.
-- No per-definition human-consent ledger is implemented yet; model mutation registration remains opt-in for that reason.
-- Real DSH integration CI should be added by testing this package inside a pinned DeepSeek Harness checkout.
+- Claude context flow is summary-level, not full transcript snapshot parity with DSH.
+- Claude live-session external resume is deliberately not implemented as a safe primitive.
+- The Claude mutation opt-in is deployment-level; per-action human consent is future work.
+- A true cross-adapter Context Bridge is not implemented yet.
+- The durable worker is a user-space daemon, not an OS service manager.
+
+## License
+
+MIT

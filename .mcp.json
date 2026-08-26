@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "orchestration": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-server.js"],
+      "env": {
+        "FLOWIT_WORKFLOW_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}",
+        "FLOWIT_WORKFLOW_CLAUDE_MUTATIONS": "${FLOWIT_WORKFLOW_CLAUDE_MUTATIONS:-0}",
+        "FLOWIT_WORKFLOW_CLAUDE_ALLOW_LIVE_RESUME": "${FLOWIT_WORKFLOW_CLAUDE_ALLOW_LIVE_RESUME:-0}"
+      }
+    }
+  }
+}

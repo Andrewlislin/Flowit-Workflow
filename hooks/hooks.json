@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],
+    "Stop": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],
+    "StopFailure": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],
+    "TaskCompleted": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],
+    "SubagentStop": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],
+    "SessionEnd": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}]
+  }
+}

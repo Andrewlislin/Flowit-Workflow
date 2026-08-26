@@ -1,32 +1,23 @@
 {
-  "name": "@coaseedge/dsh-flowit-workflow",
-  "version": "0.1.0",
-  "description": "DeepSeek Harness plugins for cross-session orchestration, durable scheduling, Skill binding, and context flow.",
+  "name": "@coaseedge/flowit-workflow",
+  "version": "0.2.0",
+  "description": "Agent-agnostic orchestration core with durable scheduling, pipeline graphs, Skill binding, context flow, and host adapters.",
   "license": "MIT",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./core": { "types": "./dist/core/index.d.ts", "default": "./dist/core/index.js" },
+    "./claude-code": { "types": "./dist/claude/index.d.ts", "default": "./dist/claude/index.js" },
+    "./adapters/claude-code": { "types": "./dist/adapters/claude-code.d.ts", "default": "./dist/adapters/claude-code.js" },
+    "./adapters/dsh": { "types": "./dist/adapters/dsh.d.ts", "default": "./dist/adapters/dsh.js" },
+    "./dsh": { "types": "./dist/dsh/plugin.d.ts", "default": "./dist/dsh/plugin.js" }
   },
-  "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
-  ],
-  "engines": {
-    "node": "^22.19.0 || >=24.0.0"
-  },
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test tests/*.test.ts",
-    "check": "npm run typecheck && npm run test",
-    "prepare": "npm run build"
-  },
+  "bin": { "flowit-workflow": "dist/cli.js" },
+  "files": ["dist", ".claude-plugin", ".mcp.json", "hooks", "skills", "README.md", "LICENSE"],
+  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "node --import tsx --test tests/*.test.ts", "check": "npm run typecheck && npm run test", "prepare": "npm run build" },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
@@ -35,7 +26,19 @@
     "@deepseek-ai/dsh-session-persistence": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-session-reference": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2"
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-session-persistence": { "optional": true },
+    "@deepseek-ai/dsh-session-reference": { "optional": true },
+    "@deepseek-ai/dsh-skill": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true }
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
@@ -48,13 +51,9 @@
     "@deepseek-ai/dsh-session-persistence": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-session-reference": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Andrewlislin/Flowit-Workflow.git"
-  },
-  "dependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1"
-  }
+  },
+  "repository": { "type": "git", "url": "git+https://github.com/Andrewlislin/Flowit-Workflow.git" },
+  "packageManager": "pnpm@11.7.0"
 }
