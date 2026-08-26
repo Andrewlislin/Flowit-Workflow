@@ -1,0 +1,8 @@
+# Merge into ~/.codex/config.toml and replace the absolute path.
+[mcp_servers.flowit-workflow]
+command = "node"
+args = ["/ABSOLUTE/PATH/TO/Flowit-Workflow/dist/mcp-server.js"]
+
+[mcp_servers.flowit-workflow.env]
+FLOWIT_WORKFLOW_ADAPTER = "codex"
+FLOWIT_WORKFLOW_MUTATIONS = "0"

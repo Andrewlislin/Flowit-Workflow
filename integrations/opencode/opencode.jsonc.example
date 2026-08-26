@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "flowit-workflow": {
+        "type": "local",
+        "command": [
+          "node",
+          "/ABSOLUTE/PATH/TO/Flowit-Workflow/dist/mcp-server.js"
+        ]
+      }
+    }
+  }
+}

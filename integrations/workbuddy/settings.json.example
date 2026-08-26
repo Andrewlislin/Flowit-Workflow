@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks":[{"type":"command","command":"node /ABSOLUTE/PATH/TO/Flowit-Workflow/dist/cli.js bridge-hook workbuddy","timeout":10}]}],
+    "Stop": [{"hooks":[{"type":"command","command":"node /ABSOLUTE/PATH/TO/Flowit-Workflow/dist/cli.js bridge-hook workbuddy","timeout":10}]}],
+    "SessionEnd": [{"hooks":[{"type":"command","command":"node /ABSOLUTE/PATH/TO/Flowit-Workflow/dist/cli.js bridge-hook workbuddy","timeout":10}]}]
+  }
+}

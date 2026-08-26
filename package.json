@@ -1,6 +1,6 @@
 {
   "name": "@coaseedge/flowit-workflow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Agent-agnostic orchestration core with durable scheduling, pipeline graphs, Skill binding, context flow, and host adapters.",
   "license": "MIT",
   "type": "module",
@@ -11,13 +11,25 @@
     "./core": { "types": "./dist/core/index.d.ts", "default": "./dist/core/index.js" },
     "./claude-code": { "types": "./dist/claude/index.d.ts", "default": "./dist/claude/index.js" },
     "./adapters/claude-code": { "types": "./dist/adapters/claude-code.d.ts", "default": "./dist/adapters/claude-code.js" },
+    "./adapters/opencode": { "types": "./dist/adapters/opencode.d.ts", "default": "./dist/adapters/opencode.js" },
+    "./adapters/codex": { "types": "./dist/adapters/codex.d.ts", "default": "./dist/adapters/codex.js" },
+    "./adapters/workbuddy": { "types": "./dist/adapters/workbuddy.d.ts", "default": "./dist/adapters/workbuddy.js" },
+    "./adapters/doubao-office": { "types": "./dist/adapters/doubao-office.d.ts", "default": "./dist/adapters/doubao-office.js" },
+    "./adapters/file-bridge": { "types": "./dist/adapters/file-bridge.d.ts", "default": "./dist/adapters/file-bridge.js" },
+    "./runtime-factory": { "types": "./dist/runtime-factory.d.ts", "default": "./dist/runtime-factory.js" },
     "./adapters/dsh": { "types": "./dist/adapters/dsh.d.ts", "default": "./dist/adapters/dsh.js" },
     "./dsh": { "types": "./dist/dsh/plugin.d.ts", "default": "./dist/dsh/plugin.js" }
   },
   "bin": { "flowit-workflow": "dist/cli.js" },
-  "files": ["dist", ".claude-plugin", ".mcp.json", "hooks", "skills", "README.md", "LICENSE"],
+  "files": ["dist", ".claude-plugin", ".mcp.json", "hooks", "skills", "integrations", "README.md", "LICENSE"],
   "engines": { "node": "^22.19.0 || >=24.0.0" },
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit", "test": "node --import tsx --test tests/*.test.ts", "check": "npm run typecheck && npm run test", "prepare": "npm run build" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm run test",
+    "prepare": "npm run build"
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
@@ -27,7 +39,8 @@
     "@deepseek-ai/dsh-session-reference": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@opencode-ai/client": "*"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": { "optional": true },
@@ -38,7 +51,8 @@
     "@deepseek-ai/dsh-session-reference": { "optional": true },
     "@deepseek-ai/dsh-skill": { "optional": true },
     "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/schemastery": { "optional": true }
+    "@deepseek-ai/schemastery": { "optional": true },
+    "@opencode-ai/client": { "optional": true }
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
