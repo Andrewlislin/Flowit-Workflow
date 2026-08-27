@@ -1,0 +1,75 @@
+name: Bootstrap strict type fixes
+
+on:
+  push:
+    branches:
+      - fix/opencode-sdk-supply-chain
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.repository == 'Andrewlislin/Flowit-Workflow'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply exact optional-property compatibility fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              'src/adapters/codex.ts': [
+                  ('private client?: CodexAppServerClient', 'private client: CodexAppServerClient | undefined'),
+                  ('private process?: ChildProcessWithoutNullStreams', 'private process: ChildProcessWithoutNullStreams | undefined'),
+                  ('private started?: Promise<void>', 'private started: Promise<void> | undefined'),
+                  ('private closedError?: Error', 'private closedError: Error | undefined'),
+              ],
+              'src/adapters/dsh.ts': [
+                  ('const handle = await this.ctx.agents.resume({ resumeSessionId: id, signal });', 'const handle = await this.ctx.agents.resume({ resumeSessionId: id, ...(signal ? { signal } : {}) });'),
+              ],
+              'src/adapters/workbuddy.ts': [
+                  ('private readonly dispatchCommand?: string[];', 'private readonly dispatchCommand: string[] | undefined;'),
+              ],
+              'src/core/store.ts': [
+                  ('parsed.runs = parsed.runs.map(run => ({ attempt: run.attempt ?? 1, updatedAt: run.updatedAt ?? run.completedAt ?? run.startedAt, ...run }))', 'parsed.runs = parsed.runs.map(run => ({ ...run, attempt: run.attempt ?? 1, updatedAt: run.updatedAt ?? run.completedAt ?? run.startedAt }))'),
+              ],
+              'src/cli.ts': [
+                  ("async function runControl(args: string[]): Promise<void> { const value = option(args, 'adapter'); const adapter = value === undefined ? undefined : requireBuiltInAdapterId(value); const request = JSON.parse(await readStdin()) as ControlRequest; const core = createConfiguredRuntime({ activeWorkers: false, ...(adapter ? { defaultAdapterId: adapter, adapterIds: [adapter] } : {}), ...(option(args, 'instance') ? { instanceId: option(args, 'instance') } : {}) }); try { await core.ready; console.log(JSON.stringify(await executeControl(core, request), null, 2)) } finally { await core.dispose() } }", "async function runControl(args: string[]): Promise<void> { const value = option(args, 'adapter'); const adapter = value === undefined ? undefined : requireBuiltInAdapterId(value); const instanceId = option(args, 'instance'); const request = JSON.parse(await readStdin()) as ControlRequest; const core = createConfiguredRuntime({ activeWorkers: false, ...(adapter ? { defaultAdapterId: adapter, adapterIds: [adapter] } : {}), ...(instanceId ? { instanceId } : {}) }); try { await core.ready; console.log(JSON.stringify(await executeControl(core, request), null, 2)) } finally { await core.dispose() } }"),
+                  ("async function runSessions(args: string[]): Promise<void> { const adapter = requireBuiltInAdapterId(option(args, 'adapter') ?? process.env.FLOWIT_WORKFLOW_ADAPTER ?? 'claude-code'); const core = createConfiguredRuntime({ activeWorkers: false, defaultAdapterId: adapter, adapterIds: [adapter], ...(option(args, 'instance') ? { instanceId: option(args, 'instance') } : {}) }); try { await core.ready; console.log(JSON.stringify(await executeControl(core, { op: 'sessions.list', adapterId: adapter }), null, 2)) } finally { await core.dispose() } }", "async function runSessions(args: string[]): Promise<void> { const adapter = requireBuiltInAdapterId(option(args, 'adapter') ?? process.env.FLOWIT_WORKFLOW_ADAPTER ?? 'claude-code'); const instanceId = option(args, 'instance'); const core = createConfiguredRuntime({ activeWorkers: false, defaultAdapterId: adapter, adapterIds: [adapter], ...(instanceId ? { instanceId } : {}) }); try { await core.ready; console.log(JSON.stringify(await executeControl(core, { op: 'sessions.list', adapterId: adapter }), null, 2)) } finally { await core.dispose() } }"),
+              ],
+              'src/mcp-server.ts': [
+                  ("case 'sessions_list': return executeControl(core, { op: 'sessions.list', ...(optional(args.adapterId) ? { adapterId: optional(args.adapterId) } : {}), ...(optional(args.query) ? { query: optional(args.query) } : {}) })", "case 'sessions_list': { const adapterId = optional(args.adapterId); const query = optional(args.query); return executeControl(core, { op: 'sessions.list', ...(adapterId ? { adapterId } : {}), ...(query ? { query } : {}) }) }"),
+              ],
+          }
+
+          changed = False
+          for filename, pairs in replacements.items():
+              path = Path(filename)
+              text = path.read_text()
+              original = text
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f'expected text not found in {filename}: {old[:100]}')
+                  text = text.replace(old, new, 1)
+              if text != original:
+                  path.write_text(text)
+                  changed = True
+
+          if not changed:
+              print('No strict TypeScript fixes required.')
+          PY
+      - name: Commit fixes
+        shell: bash
+        run: |
+          if git diff --quiet -- src; then
+            echo 'Strict TypeScript baseline is already fixed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src
+          git commit -m 'fix: satisfy strict TypeScript baseline'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
