@@ -21,7 +21,9 @@ jobs:
         with:
           node-version: 24
       - name: Apply package boundary migration
-        run: python3 scripts/bootstrap-package-boundaries.py
+        run: |
+          python3 scripts/bootstrap-package-boundaries.py
+          python3 scripts/post-package-boundaries.py
       - name: Resolve reviewed workspace dependency graph
         run: |
           pnpm install --lockfile-only --ignore-scripts
@@ -35,6 +37,7 @@ jobs:
           pnpm run check:style
           pnpm run build
           pnpm run check:pack
+          pnpm run test:opencode-contract
           pnpm run typecheck:root
           pnpm run test:raw
           pnpm run test:host-contracts:raw
