@@ -4,16 +4,159 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { formatSessionReferenceMention } from '@deepseek-ai/dsh-session-reference'
 import { isModelInvocable, renderSkillContent } from '@deepseek-ai/dsh-skill'
-import type { AgentAdapter, AgentDispatchRequest, AgentDispatchResult, AgentEvent, AgentSessionDescriptor } from '@coaseedge/flowit-core'
+import type {
+  AgentAdapter,
+  AgentDispatchRequest,
+  AgentDispatchResult,
+  AgentEvent,
+  AgentSessionDescriptor,
+} from '@coaseedge/flowit-core'
 
 export const DSH_ADAPTER_ID = 'deepseek-harness'
+
 export class DshAgentAdapter implements AgentAdapter {
   readonly id = DSH_ADAPTER_ID
-  readonly capabilities = { coldResume: true, liveDispatch: true, skillBinding: true, contextReference: 'native' as const, eventSubscription: true }
+  readonly capabilities = {
+    coldResume: true,
+    liveDispatch: false,
+    skillBinding: true,
+    contextReference: 'native' as const,
+    eventSubscription: true,
+  }
+
   constructor(private readonly ctx: Context) {}
-  async listSessions(query = ''): Promise<AgentSessionDescriptor[]> { const needle = query.trim().toLocaleLowerCase(); return this.ctx.agents.roots().map(agent => ({ adapterId: this.id, sessionId: String(agent.id), ...(agent.session.header.cwd ? { cwd: agent.session.header.cwd } : {}), status: agent.status === 'running' ? 'live' as const : 'idle' as const })).filter(session => !needle || session.sessionId.toLocaleLowerCase().includes(needle) || session.cwd?.toLocaleLowerCase().includes(needle) === true) }
-  async dispatch(request: AgentDispatchRequest, signal?: AbortSignal): Promise<AgentDispatchResult> { signal?.throwIfAborted(); for (const ref of request.contextRefs) if (ref.adapterId !== this.id) throw new Error(`DSH adapter cannot natively reference context from adapter ${ref.adapterId}`); const acquired = await this.acquire(request.sessionId, signal); const agent = acquired.agent; try { const loadedSkills = await this.injectSkills(agent, request.skills, signal); const mentionText = request.contextRefs.map(ref => formatSessionReferenceMention({ sessionId: SessionId(ref.sessionId), label: ref.label ?? ref.sessionId })).join('\n'); const prompt = mentionText.length > 0 ? `${request.prompt}\n\nUse these referenced sessions as read-only background context:\n${mentionText}` : request.prompt; agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: prompt }] })); await agent.whenIdle(); signal?.throwIfAborted(); return { sessionId: request.sessionId, loadedSkills, referencedSessions: request.contextRefs.map(ref => ref.sessionId) } } finally { if (acquired.handle) await acquired.handle.dispose() } }
-  subscribe(listener: (event: AgentEvent) => Promise<void> | void): () => void { return this.ctx.on('session/event', (session, event) => { if (event.type !== 'turn/end') return; const kind = event.data.reason.kind === 'completed' ? 'turn_completed' : 'turn_failed'; void Promise.resolve(listener({ adapterId: this.id, sessionId: String(session.header.id), kind, eventId: `${String(session.header.id)}:turn:${event.data.turn}:${kind}`, at: new Date().toISOString() })).catch(() => undefined) }) }
-  private async injectSkills(agent: Agent, skillNames: readonly string[], signal?: AbortSignal): Promise<string[]> { const loaded: string[] = []; for (const name of skillNames) { signal?.throwIfAborted(); const skill = await this.ctx.skills.get(name, { cwd: agent.session.header.cwd, scope: agent, signal }); if (!skill) throw new Error(`skill ${JSON.stringify(name)} is unavailable in session ${agent.id}`); if (!isModelInvocable(skill)) throw new Error(`skill ${JSON.stringify(name)} is not model-invocable`); agent.inject(createUserMessage({ source: { kind: 'plugin', plugin: 'flowit-workflow' }, content: [{ type: 'text', text: renderSkillContent(skill) }] })); loaded.push(name) } return loaded }
-  private async acquire(sessionId: string, signal?: AbortSignal): Promise<{ agent: Agent; handle?: AgentHandle }> { const id = SessionId(sessionId); const live = this.ctx.agents.get(id); if (live) return { agent: live }; const handle = await this.ctx.agents.resume({ resumeSessionId: id, ...(signal ? { signal } : {}) }); return { agent: handle.agent, handle } }
+
+  async listSessions(query = ''): Promise<AgentSessionDescriptor[]> {
+    const needle = query.trim().toLocaleLowerCase()
+    return this.ctx.agents
+      .roots()
+      .map(agent => ({
+        adapterId: this.id,
+        sessionId: String(agent.id),
+        ...(agent.session.header.cwd ? { cwd: agent.session.header.cwd } : {}),
+        status: agent.status === 'running' ? ('live' as const) : ('idle' as const),
+      }))
+      .filter(
+        session =>
+          !needle ||
+          session.sessionId.toLocaleLowerCase().includes(needle) ||
+          session.cwd?.toLocaleLowerCase().includes(needle) === true,
+      )
+  }
+
+  async dispatch(
+    request: AgentDispatchRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentDispatchResult> {
+    signal?.throwIfAborted()
+    for (const ref of request.contextRefs) {
+      if (ref.adapterId !== this.id)
+        throw new Error(`DSH adapter cannot natively reference context from adapter ${ref.adapterId}`)
+    }
+
+    const acquired = await this.acquire(request.sessionId, signal)
+    const agent = acquired.agent
+    let abort: (() => void) | undefined
+    try {
+      if (agent.status === 'running') {
+        throw new Error(
+          `DSH session ${request.sessionId} is already running; Flowit refuses concurrent dispatch so cancellation cannot interrupt unrelated host work`,
+        )
+      }
+      const loadedSkills = await this.injectSkills(agent, request.skills, signal)
+      const mentionText = request.contextRefs
+        .map(ref =>
+          formatSessionReferenceMention({
+            sessionId: SessionId(ref.sessionId),
+            label: ref.label ?? ref.sessionId,
+          }),
+        )
+        .join('\n')
+      const prompt =
+        mentionText.length > 0
+          ? `${request.prompt}\n\nUse these referenced sessions as read-only background context:\n${mentionText}`
+          : request.prompt
+
+      signal?.throwIfAborted()
+      agent.followup(
+        createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: prompt }] }),
+      )
+      if (signal) {
+        abort = () => {
+          try {
+            agent.cancel({ kind: 'parent' }, { keepInbox: true })
+          } catch {}
+        }
+        signal.addEventListener('abort', abort, { once: true })
+        if (signal.aborted) abort()
+      }
+      await agent.whenIdle()
+      signal?.throwIfAborted()
+      return {
+        sessionId: request.sessionId,
+        loadedSkills,
+        referencedSessions: request.contextRefs.map(ref => ref.sessionId),
+      }
+    } finally {
+      if (abort) signal?.removeEventListener('abort', abort)
+      if (acquired.handle) await acquired.handle.dispose()
+    }
+  }
+
+  subscribe(listener: (event: AgentEvent) => Promise<void> | void): () => void {
+    return this.ctx.on('session/event', (session, event) => {
+      if (event.type !== 'turn/end') return
+      const kind = event.data.reason.kind === 'completed' ? 'turn_completed' : 'turn_failed'
+      void Promise.resolve(
+        listener({
+          adapterId: this.id,
+          sessionId: String(session.header.id),
+          kind,
+          eventId: `${String(session.header.id)}:turn:${event.data.turn}:${kind}`,
+          at: new Date().toISOString(),
+        }),
+      ).catch(() => undefined)
+    })
+  }
+
+  private async injectSkills(
+    agent: Agent,
+    skillNames: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<string[]> {
+    const loaded: string[] = []
+    for (const name of skillNames) {
+      signal?.throwIfAborted()
+      const skill = await this.ctx.skills.get(name, {
+        cwd: agent.session.header.cwd,
+        scope: agent,
+        signal,
+      })
+      if (!skill) throw new Error(`skill ${JSON.stringify(name)} is unavailable in session ${agent.id}`)
+      if (!isModelInvocable(skill))
+        throw new Error(`skill ${JSON.stringify(name)} is not model-invocable`)
+      agent.inject(
+        createUserMessage({
+          source: { kind: 'plugin', plugin: 'flowit-workflow' },
+          content: [{ type: 'text', text: renderSkillContent(skill) }],
+        }),
+      )
+      loaded.push(name)
+    }
+    return loaded
+  }
+
+  private async acquire(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<{ agent: Agent; handle?: AgentHandle }> {
+    const id = SessionId(sessionId)
+    const live = this.ctx.agents.get(id)
+    if (live) return { agent: live }
+    const handle = await this.ctx.agents.resume({
+      resumeSessionId: id,
+      ...(signal ? { signal } : {}),
+    })
+    return { agent: handle.agent, handle }
+  }
 }
