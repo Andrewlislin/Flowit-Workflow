@@ -4,3 +4,21 @@ dist/
 .flowit-workflow/
 *.log
 .DS_Store
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+.npmrc
+.pypirc
+credentials.json
+service-account*.json
+*.credentials.json
+
+# Private keys and certificate bundles
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
