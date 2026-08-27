@@ -28,6 +28,11 @@ export interface AcquireDaemonLeaseOptions {
   acquisitionTimeoutMs?: number
 }
 
+type AcquisitionResult =
+  | { kind: 'acquired'; lease: DaemonLease }
+  | { kind: 'busy' }
+  | { kind: 'retry' }
+
 export async function canonicalStorageIdentity(storageFile: string): Promise<string> {
   const resolved = path.resolve(storageFile)
   try {
@@ -55,46 +60,62 @@ export async function acquireDaemonLease(
   await mkdir(root, { recursive: true })
 
   while (Date.now() < deadline) {
-    const ownerToken = randomUUID()
-    try {
-      await mkdir(lockDir)
-      const metadata: DaemonLeaseMetadata = {
-        version: 1,
-        ownerToken,
-        pid: process.pid,
-        instanceId,
-        storageFile: canonicalStorageFile,
-        startedAt: new Date().toISOString(),
-      }
-      // Do not rm(lockDir) if owner metadata publication fails: the path may already
-      // have been moved aside and replaced by another contender. An incomplete lock
-      // is recovered only through the initialization-grace / stale-lock path below.
-      await writeOwner(lockDir, metadata)
-      return createLease(lockDir, mutationDir, metadata)
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-
-    const recovered = await withFailClosedMutex(
+    const result = await withFailClosedMutex(
       mutationDir,
-      async () => {
+      async (): Promise<AcquisitionResult> => {
         const metadata = await readOwner(lockDir)
+        const exists = await stat(lockDir)
+          .then(() => true)
+          .catch(error => {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+            throw error
+          })
+
+        if (!exists) {
+          const ownerToken = randomUUID()
+          try {
+            await mkdir(lockDir)
+          } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { kind: 'retry' }
+            throw error
+          }
+          const fresh: DaemonLeaseMetadata = {
+            version: 1,
+            ownerToken,
+            pid: process.pid,
+            instanceId,
+            storageFile: canonicalStorageFile,
+            startedAt: new Date().toISOString(),
+          }
+          try {
+            await writeOwner(lockDir, fresh)
+          } catch (error) {
+            await rm(lockDir, { recursive: true, force: true }).catch(() => undefined)
+            throw error
+          }
+          return { kind: 'acquired', lease: createLease(lockDir, mutationDir, fresh) }
+        }
+
         if (!metadata) {
           const age = await stat(lockDir)
             .then(value => Date.now() - value.mtimeMs)
             .catch(() => 0)
-          if (age < initializationGraceMs) return false
-          return moveAside(lockDir, 'uninitialized')
+          if (age < initializationGraceMs) return { kind: 'busy' }
+          await moveAside(lockDir, 'uninitialized')
+          return { kind: 'retry' }
         }
-        if (isProcessAlive(metadata.pid))
+        if (isProcessAlive(metadata.pid)) {
           throw new Error(
             `Flowit Workflow worker already owns storage ${canonicalStorageFile} (pid ${metadata.pid}, instance ${metadata.instanceId})`,
           )
-        return moveAside(lockDir, `stale.${metadata.ownerToken}`)
+        }
+        await moveAside(lockDir, `stale.${metadata.ownerToken}`)
+        return { kind: 'retry' }
       },
       Math.max(1, deadline - Date.now()),
     )
-    if (recovered) continue
+    if (result.kind === 'acquired') return result.lease
+    if (result.kind === 'retry') continue
     await sleep(25)
   }
   throw new Error(`timed out acquiring Flowit Workflow worker lease for ${canonicalStorageFile}`)
@@ -141,7 +162,11 @@ async function readOwner(lockDir: string): Promise<DaemonLeaseMetadata | undefin
       return undefined
     return value
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError)
+    if (
+      (error as NodeJS.ErrnoException).code === 'ENOENT' ||
+      (error as NodeJS.ErrnoException).code === 'ENOTDIR' ||
+      error instanceof SyntaxError
+    )
       return undefined
     throw error
   }
