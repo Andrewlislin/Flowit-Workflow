@@ -126,7 +126,7 @@ The Core stores orchestration facts and references. Host adapters translate thos
 | --- | --- | --- | --- | --- | --- |
 | DeepSeek Harness | **Reference** | Native live/cold Session | Native | Native snapshot | Native |
 | Claude Code | **Pilot** | Public `--resume` path | Verified wrapper Skill | Bounded summary | Durable Hooks journal |
-| OpenCode V2 | **Experimental** | Pinned generated Session API | Generated Skill catalog | Bounded Session context | Reconnecting event stream |
+| OpenCode V2 | **Experimental** | Official `@opencode-ai/sdk` V2 API | Official V2 Skill API | Bounded Session context | Reconnecting V2 event stream |
 | Codex | **Experimental** | App Server v2 thread/turn API | Typed `skill` item | Bounded thread summary | App Server notifications |
 | WorkBuddy | **Hybrid** | Bridge or managed driver | WorkBuddy Skill | Bounded summary | Hooks/bridge |
 | 豆包办公 | **Bridge** | Host Worker only | Custom Skill | Bounded summary | No public event API claimed |
@@ -204,15 +204,15 @@ Conflicting non-empty databases fail closed rather than being silently merged.
 <details>
 <summary><strong>OpenCode V2</strong></summary>
 
-Set `FLOWIT_WORKFLOW_OPENCODE_URL`. Flowit uses the pinned plural generated client surface:
+Set `FLOWIT_WORKFLOW_OPENCODE_URL`. Flowit pins the public npm package `@opencode-ai/sdk@1.18.23`, matching the OpenCode source revision against which the V2 contract was reviewed. It does not install an internal vendor tarball or a Git/HTTP dependency.
 
 ```text
-client.sessions.*
-client.skills.*
-client.events.*
+client.v2.session.*
+client.v2.skill.*
+client.v2.event.*
 ```
 
-The adapter preserves stable host event identity, maps both `session.idle` and `session.status: idle`, preflights startup, and reconnects the event stream with bounded backoff.
+The SDK remains an optional peer dependency so non-OpenCode consumers do not load it. Runtime loading is lazy. The adapter preserves stable host event identity, maps both `session.idle` and `session.status: idle`, preflights startup, and reconnects the event stream with bounded backoff.
 
 </details>
 
@@ -250,6 +250,7 @@ See [`integrations/bridge/PROTOCOL.md`](integrations/bridge/PROTOCOL.md).
 
 ```bash
 pnpm install
+pnpm check:supply-chain
 pnpm typecheck
 pnpm test
 pnpm test:host-contracts
@@ -258,12 +259,13 @@ pnpm build
 
 | Command | Purpose |
 | --- | --- |
+| `pnpm check:supply-chain` | Reject URL, Git, local-file, and tarball dependency specifiers |
 | `pnpm typecheck` | Strict TypeScript validation |
 | `pnpm test` | Unit, recovery, lease, migration, and concurrency tests |
 | `pnpm test:host-contracts` | Pinned host protocol contracts |
 | `pnpm build` | Emit the distributable package |
 
-The repository currently treats a reviewed `pnpm-lock.yaml` and a fully executed CI validation chain as release gates.
+The repository treats a reviewed `pnpm-lock.yaml`, registry-only dependency sources, and a fully executed CI validation chain as release gates.
 
 ## Contributing
 

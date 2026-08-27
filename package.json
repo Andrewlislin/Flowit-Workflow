@@ -28,7 +28,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:host-contracts": "node --import tsx --test tests/contracts/*.test.ts",
-    "check": "npm run typecheck && npm run test && npm run test:host-contracts",
+    "check:supply-chain": "node scripts/check-dependency-sources.mjs",
+    "check": "npm run check:supply-chain && npm run typecheck && npm run test && npm run test:host-contracts",
     "prepare": "npm run build"
   },
   "peerDependencies": {
@@ -41,7 +42,7 @@
     "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@opencode-ai/client": "1.17.13-v2"
+    "@opencode-ai/sdk": "1.18.23"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": { "optional": true },
@@ -53,7 +54,7 @@
     "@deepseek-ai/dsh-skill": { "optional": true },
     "@deepseek-ai/dsh-tools": { "optional": true },
     "@deepseek-ai/schemastery": { "optional": true },
-    "@opencode-ai/client": { "optional": true }
+    "@opencode-ai/sdk": { "optional": true }
   },
   "devDependencies": {
     "@types/node": "^22.20.0",
@@ -68,7 +69,7 @@
     "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@opencode-ai/client": "https://raw.githubusercontent.com/anomalyco/opencode/fd9bd448a2e68990e7aed3495e5590cecb934bfb/packages/app/vendor/opencode-ai-client-1.17.13-v2.tgz"
+    "@opencode-ai/sdk": "1.18.23"
   },
   "repository": { "type": "git", "url": "git+https://github.com/Andrewlislin/Flowit-Workflow.git" },
   "packageManager": "pnpm@11.7.0"

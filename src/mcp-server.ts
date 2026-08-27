@@ -38,7 +38,7 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
 async function call(name: string, args: Record<string, unknown>): Promise<unknown> {
   if (isMutation(name) && !mutationsEnabled) throw new Error('Flowit Workflow mutation tools are disabled. Set FLOWIT_WORKFLOW_MUTATIONS=1 to opt in.')
   switch (name) {
-    case 'sessions_list': return executeControl(core, { op: 'sessions.list', ...(optional(args.adapterId) ? { adapterId: optional(args.adapterId) } : {}), ...(optional(args.query) ? { query: optional(args.query) } : {}) })
+    case 'sessions_list': { const adapterId = optional(args.adapterId); const query = optional(args.query); return executeControl(core, { op: 'sessions.list', ...(adapterId ? { adapterId } : {}), ...(query ? { query } : {}) }) }
     case 'dispatch': return executeControl(core, { op: 'dispatch', target: object(args.target, 'target') as unknown as AutomationTarget })
     case 'schedule_list': return executeControl(core, { op: 'schedule.list' })
     case 'schedule_create': return executeControl(core, { op: 'schedule.create', input: object(args.input, 'input') as unknown as CreateScheduleInput })

@@ -64,15 +64,19 @@ test('terminal receipts obey a bounded retention cap instead of growing without 
 })
 
 test('audit pruning never removes an active lease or the latest automatic retry state', async () => withStores(async (a) => {
-  const active = await a.claimRun({ kind: 'pipeline', definitionId: 'active', triggerKey: 'event:active', owner: 'worker-a', leaseDurationMs: 60_000, maxAttempts: 3, permanentDedupe: true, now: new Date('2026-08-26T00:00:00Z') })
+  const baseMs = Date.now()
+  const createdAt = new Date(baseMs - 5_000).toISOString()
+  await a.putPipeline({ id: 'retry', name: 'retry', trigger: { kind: 'manual' }, nodes: [], edges: [], status: 'active', createdAt, updatedAt: createdAt })
+
+  const active = await a.claimRun({ kind: 'pipeline', definitionId: 'active', triggerKey: 'event:active', owner: 'worker-a', leaseDurationMs: 60_000, maxAttempts: 3, permanentDedupe: true, now: new Date(baseMs) })
   assert.equal(active.kind, 'claimed'); if (active.kind !== 'claimed') return
 
-  const failed = await a.claimRun({ kind: 'pipeline', definitionId: 'retry', triggerKey: 'event:retry', owner: 'worker-a', leaseDurationMs: 1000, maxAttempts: 3, permanentDedupe: true, now: new Date('2026-08-26T00:00:01Z') })
+  const failed = await a.claimRun({ kind: 'pipeline', definitionId: 'retry', triggerKey: 'event:retry', owner: 'worker-a', leaseDurationMs: 1000, maxAttempts: 3, permanentDedupe: true, now: new Date(baseMs - 3_000) })
   assert.equal(failed.kind, 'claimed'); if (failed.kind !== 'claimed') return
-  await a.failRun(failed.run.id, 'worker-a', 'temporary', { retryDelayMs: 60_000, deadLetter: false }, new Date('2026-08-26T00:00:02Z'))
+  await a.failRun(failed.run.id, 'worker-a', 'temporary', { retryDelayMs: 60_000, deadLetter: false }, new Date(baseMs - 2_000))
 
   for (let index = 0; index < 4; index += 1) {
-    const other = await a.claimRun({ kind: 'schedule', definitionId: `audit-${index}`, triggerKey: `audit:${index}`, owner: 'worker-a', leaseDurationMs: 1000, maxAttempts: 1, now: new Date(`2026-08-26T00:00:1${index}Z`) })
+    const other = await a.claimRun({ kind: 'schedule', definitionId: `audit-${index}`, triggerKey: `audit:${index}`, owner: 'worker-a', leaseDurationMs: 1000, maxAttempts: 1, now: new Date(baseMs - 1_000 + index) })
     if (other.kind === 'claimed') await a.completeRun(other.run.id, 'worker-a')
   }
 
