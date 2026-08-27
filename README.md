@@ -276,3 +276,24 @@ Issues and pull requests are welcome. Keep adapter capability claims conservativ
 Licensed under the [Apache License, Version 2.0](LICENSE). Attribution notices are recorded in [`NOTICE`](NOTICE).
 
 Copyright © 2026 CoaseEdge.
+
+
+## Minimal package installs
+
+Flowit can now be installed at the same boundary used by the architecture:
+
+```bash
+# Host-agnostic Core only
+pnpm add @coaseedge/flowit-core
+
+# OpenCode deployment
+pnpm add @coaseedge/flowit-core @coaseedge/flowit-adapter-opencode
+
+# Claude Code deployment
+pnpm add @coaseedge/flowit-core @coaseedge/flowit-adapter-claude-code
+
+# Batteries-included / backwards-compatible distribution
+pnpm add @coaseedge/flowit-workflow
+```
+
+The full package intentionally has the broadest SBOM. Minimal installations do not inherit unrelated Host SDKs. DSH consumers additionally satisfy the peer dependencies declared by `@coaseedge/flowit-adapter-dsh`.

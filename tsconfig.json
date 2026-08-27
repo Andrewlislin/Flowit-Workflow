@@ -1,17 +1,8 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2023",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "types": ["node"],
-    "strict": true,
-    "declaration": true,
-    "outDir": "dist",
     "rootDir": "src",
-    "skipLibCheck": true,
-    "verbatimModuleSyntax": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true
+    "outDir": "dist"
   },
   "include": [
     "src/**/*.ts"
@@ -19,6 +10,7 @@
   "exclude": [
     "dist",
     "node_modules",
-    "tests"
+    "tests",
+    "packages"
   ]
 }

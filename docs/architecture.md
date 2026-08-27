@@ -176,3 +176,10 @@ OpenCode preserves authoritative host event IDs when available, then durable agg
 - **Codex** — Experimental; bidirectional App Server v2, abortable startup, fail-closed approvals, terminal checks and deadlines.
 - **WorkBuddy** — Hybrid bridge/driver.
 - **豆包办公** — constrained Bridge; no unverified Session Resume/Event API claims.
+
+
+## Package boundaries
+
+Flowit's `AgentAdapter` boundary is also an npm package boundary. `@coaseedge/flowit-core` contains the host-agnostic orchestration engine and has no third-party runtime dependencies or peers. Host integrations ship separately as `@coaseedge/flowit-adapter-*` packages. The existing `@coaseedge/flowit-workflow` package remains the batteries-included compatibility distribution and re-exports its previous public subpaths.
+
+Minimal consumers install only Core plus the adapters they use. The full package intentionally aggregates every built-in adapter and therefore has the broadest SBOM.

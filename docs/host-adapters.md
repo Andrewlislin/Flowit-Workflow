@@ -82,3 +82,18 @@ OpenCode and Codex remain Experimental until:
 4. a reviewed `pnpm-lock.yaml` exists and the frozen-lockfile gate is green.
 
 A GitHub Actions run with `runner_id=0` and `steps=[]` is neither code-failure evidence nor passing evidence.
+
+
+## Installation packages
+
+| Package | Dependency boundary |
+| --- | --- |
+| `@coaseedge/flowit-core` | Host-agnostic orchestration Core; no third-party runtime dependencies or peers. |
+| `@coaseedge/flowit-adapter-claude-code` | Claude Code integration; depends only on Core. |
+| `@coaseedge/flowit-adapter-opencode` | OpenCode integration; owns exact `@opencode-ai/sdk@1.18.23`. |
+| `@coaseedge/flowit-adapter-codex` | Codex App Server integration; depends only on Core. |
+| `@coaseedge/flowit-adapter-dsh` | DSH integration; DeepSeek Harness SDKs are explicit host-owned peer dependencies. |
+| `@coaseedge/flowit-adapter-file-bridge` | Generic Bridge integration. |
+| `@coaseedge/flowit-adapter-workbuddy` | WorkBuddy integration over the File Bridge package. |
+| `@coaseedge/flowit-adapter-doubao-office` | Doubao Office integration over the File Bridge package. |
+| `@coaseedge/flowit-workflow` | Full/convenience distribution aggregating every built-in adapter while preserving the legacy import surface. |

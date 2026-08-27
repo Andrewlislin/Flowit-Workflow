@@ -1,0 +1,10 @@
+import { randomUUID } from 'node:crypto'
+import type { AgentEventKind } from '../core/types.js'
+import { appendBridgeEvent, bridgeStatePaths, upsertBridgeSession } from './state.js'
+
+export interface GenericHookInput { session_id?: string; sessionId?: string; cwd?: string; hook_event_name?: string; hookEventName?: string; event?: string; session_title?: string; title?: string; last_assistant_message?: string; lastAssistantMessage?: string; [key:string]: unknown }
+export async function ingestBridgeHook(adapterId: string, input: GenericHookInput, root?: string): Promise<void> {
+  const sessionId = stringValue(input.session_id ?? input.sessionId); if (!sessionId) throw new Error(`${adapterId} hook requires session_id/sessionId`); const event = stringValue(input.hook_event_name ?? input.hookEventName ?? input.event) ?? 'unknown'; const now = new Date().toISOString(); const paths = bridgeStatePaths(adapterId, root); const status = event === 'SessionEnd' ? 'ended' as const : event === 'SessionStart' ? 'live' as const : 'idle' as const; const name = stringValue(input.session_title ?? input.title); const cwd = stringValue(input.cwd); const last = stringValue(input.last_assistant_message ?? input.lastAssistantMessage); await upsertBridgeSession(paths, { adapterId, sessionId, ...(name ? {name}:{}), ...(cwd ? {cwd}:{}), status, updatedAt: now, ...(last ? { lastAssistantMessage: last } : {}) }); const kind = mapEvent(event); if (!kind) return; await appendBridgeEvent(paths, { adapterId, sessionId, kind, eventId: randomUUID(), at: now, ...(last ? {metadata:{lastAssistantMessage:last}}:{}) })
+}
+function mapEvent(event:string): AgentEventKind | undefined { switch(event){ case 'SessionStart': return 'session_started'; case 'SessionEnd': return 'session_ended'; case 'Stop': return 'turn_completed'; case 'StopFailure': return 'turn_failed'; case 'TaskCompleted': return 'task_completed'; case 'SubagentStop': return 'subagent_completed'; default: return undefined } }
+function stringValue(value:unknown): string | undefined { return typeof value === 'string' && value.trim() ? value.trim() : undefined }
