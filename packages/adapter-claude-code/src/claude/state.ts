@@ -115,7 +115,17 @@ export class ClaudeEventCursor {
     if (!Number.isSafeInteger(offset) || offset < 0)
       throw new Error('Claude event cursor must be a non-negative integer')
     await durableReplaceText(this.filePath, `${offset}\n`)
+    if (this.legacyFilePath && this.legacyFilePath !== this.filePath) {
+      await advanceSharedCursor(this.legacyFilePath, offset)
+    }
   }
+}
+
+async function advanceSharedCursor(filePath: string, offset: number): Promise<void> {
+  await withGenerationFileLock(filePath, async () => {
+    const current = (await readCursor(filePath)) ?? 0
+    if (offset > current) await durableReplaceText(filePath, `${offset}\n`)
+  })
 }
 
 async function readCursor(filePath: string): Promise<number | undefined> {
