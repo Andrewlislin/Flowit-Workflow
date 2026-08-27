@@ -15,6 +15,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: pnpm install
-      - run: pnpm check
-      - run: pnpm build
+      - name: Install dependencies for code validation
+        # Temporary validation path while the repository has no reviewed lockfile.
+        # This job provides code evidence but is not a reproducible release gate.
+        run: pnpm install --frozen-lockfile=false
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Unit and recovery tests
+        run: pnpm test
+      - name: Host contract tests
+        run: pnpm test:host-contracts
+      - name: Build
+        run: pnpm build
+
+  release-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require reviewed pnpm lockfile
+        run: test -f pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify frozen dependency graph
+        run: pnpm install --frozen-lockfile

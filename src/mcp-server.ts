@@ -23,10 +23,11 @@ async function handle(line: string): Promise<void> {
 }
 async function dispatch(request: JsonRpcRequest): Promise<unknown> {
   switch (request.method) {
-    case 'initialize': return { protocolVersion: typeof request.params?.protocolVersion === 'string' ? request.params.protocolVersion : '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'flowit-workflow', version: '0.3.0' } }
+    case 'initialize': return { protocolVersion: typeof request.params?.protocolVersion === 'string' ? request.params.protocolVersion : '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'flowit-workflow', version: '0.4.0' } }
     case 'ping': return {}
     case 'tools/list': return { tools: tools() }
     case 'tools/call': {
+      await core.ready
       const name = String(request.params?.name ?? '')
       const args = (request.params?.arguments ?? {}) as Record<string, unknown>
       return { content: [{ type: 'text', text: JSON.stringify(await call(name, args), null, 2) }] }
@@ -50,15 +51,31 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
       if (status !== 'active' && status !== 'paused') throw new Error('status must be active or paused')
       return executeControl(core, { op: 'pipeline.status', id: string(args.id, 'id'), status })
     }
-    case 'daemon_start': {
-      const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url))
-      const child = spawn(process.execPath, [cliPath, 'daemon', `--adapter=${adapterId}`], { detached: true, stdio: 'ignore', env: process.env })
-      child.unref()
-      return { started: true, pid: child.pid, adapterId }
-    }
+    case 'daemon_start': return startDetachedDaemon()
     default: throw new Error(`unknown Flowit Workflow MCP tool ${name}`)
   }
 }
+
+async function startDetachedDaemon(): Promise<unknown> {
+  const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url))
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, 'daemon', `--adapter=${adapterId}`, '--detach'], { stdio: ['ignore', 'pipe', 'pipe'], env: process.env })
+    let stdout = '', stderr = ''
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8')
+    child.stdout.on('data', chunk => { stdout += String(chunk) })
+    child.stderr.on('data', chunk => { stderr += String(chunk) })
+    child.on('error', reject)
+    child.on('close', code => {
+      if (code !== 0) { reject(new Error(`Flowit Workflow daemon launcher exited ${code}: ${stderr.trim() || stdout.trim()}`)); return }
+      try {
+        const lines = stdout.trim().split('\n').filter(Boolean)
+        const result = JSON.parse(lines.at(-1) ?? '') as unknown
+        resolve(result)
+      } catch (error: unknown) { reject(new Error(`Flowit Workflow daemon launcher returned invalid readiness output: ${error instanceof Error ? error.message : String(error)}`)) }
+    })
+  })
+}
+
 function tools(): unknown[] {
   const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', additionalProperties: false, properties, required })
   return [
@@ -71,7 +88,7 @@ function tools(): unknown[] {
     { name: 'pipeline_create', description: 'Create a cross-session/cross-adapter pipeline.', inputSchema: obj({ input: { type: 'object' } }, ['input']) },
     { name: 'pipeline_run', description: 'Run a pipeline now.', inputSchema: obj({ id: { type: 'string' } }, ['id']) },
     { name: 'pipeline_status', description: 'Pause or activate a pipeline.', inputSchema: obj({ id: { type: 'string' }, status: { type: 'string', enum: ['active', 'paused'] } }, ['id', 'status']) },
-    { name: 'daemon_start', description: `Start the detached Flowit Workflow daemon for ${adapterId}.`, inputSchema: obj({}) },
+    { name: 'daemon_start', description: `Start the detached Flowit Workflow daemon for ${adapterId} and wait for readiness.`, inputSchema: obj({}) },
   ].filter((tool: any) => mutationsEnabled || !isMutation(tool.name))
 }
 function isMutation(name: string): boolean { return new Set(['dispatch', 'schedule_create', 'schedule_cancel', 'pipeline_create', 'pipeline_run', 'pipeline_status', 'daemon_start']).has(name) }

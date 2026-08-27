@@ -17,7 +17,13 @@ export async function executeControl(core: FlowitOrchestrationCore, request: Con
   await core.ready
   switch (request.op) {
     case 'state': return core.store.snapshot()
-    case 'sessions.list': { const adapters = request.adapterId ? [core.adapters.require(request.adapterId)] : core.adapters.list(); return (await Promise.all(adapters.map(adapter => adapter.listSessions(request.query ?? '')))).flat() }
+    case 'sessions.list': {
+      const adapters = request.adapterId ? [core.adapters.require(request.adapterId)] : core.adapters.list()
+      return (await Promise.all(adapters.map(async adapter => {
+        await core.adapters.start(adapter)
+        return adapter.listSessions(request.query ?? '')
+      }))).flat()
+    }
     case 'dispatch': return core.dispatcher.dispatch(request.target)
     case 'schedule.list': return core.scheduler.list()
     case 'schedule.create': return core.scheduler.create(request.input)

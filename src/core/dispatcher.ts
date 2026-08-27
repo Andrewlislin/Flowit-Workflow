@@ -12,13 +12,18 @@ export class OrchestrationDispatcher {
   constructor(private readonly adapters: AgentAdapterRegistry, private readonly contextGraph: ContextGraph, private readonly skillBinder: SkillBinder, private readonly defaultAdapterId: string) {}
 
   dispatch(target: AutomationTarget, extraRefs: readonly SessionContextRef[] = [], signal?: AbortSignal): Promise<DispatchResult> {
+    return this.dispatchWithCorrelation(target, extraRefs, randomUUID(), 1, signal)
+  }
+
+  dispatchWithCorrelation(target: AutomationTarget, extraRefs: readonly SessionContextRef[], correlationId: string, attempt: number, signal?: AbortSignal): Promise<DispatchResult> {
     const adapterId = adapterIdOf(target, this.defaultAdapterId); const sessionId = target.sessionId.trim()
     if (!sessionId) return Promise.reject(new Error('target.sessionId must be a non-empty string'))
     return this.serializeTarget(`${adapterId}\u0000${sessionId}`, async () => {
-      signal?.throwIfAborted(); const adapter = this.adapters.require(adapterId)
+      signal?.throwIfAborted()
+      const adapter = await this.adapters.requireStarted(adapterId, signal)
       const refs = this.contextGraph.normalize([...target.contextRefs, ...extraRefs], this.defaultAdapterId, { adapterId, sessionId })
       const contextRefs: AdapterContextRef[] = refs.map(ref => ({ adapterId: ref.adapterId ?? this.defaultAdapterId, sessionId: ref.sessionId, ...(ref.label ? { label: ref.label } : {}) }))
-      const result = await adapter.dispatch({ correlationId: randomUUID(), sessionId, prompt: target.prompt, skills: this.skillBinder.normalize(target.skills), contextRefs }, signal)
+      const result = await adapter.dispatch({ correlationId, attempt, sessionId, prompt: target.prompt, skills: this.skillBinder.normalize(target.skills), contextRefs }, signal)
       return { adapterId, ...result }
     })
   }

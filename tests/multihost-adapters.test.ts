@@ -38,13 +38,14 @@ test('file bridge dispatch is fail-closed on Skill attestation and returns host 
         const files = (await readdir(paths.inboxDir)).filter(name => name.endsWith('.json'))
         if (files.length > 0) {
           const file = files[0]!
-          const request = JSON.parse(await readFile(path.join(paths.inboxDir, file), 'utf8')) as { requestId: string; request: { sessionId: string; skills: string[]; contextRefs: Array<{sessionId:string}> }; context: Array<{sessionId:string;summary:string}> }
-          assert.equal(request.context[0]?.summary, 'source summary')
+          const envelope = JSON.parse(await readFile(path.join(paths.inboxDir, file), 'utf8')) as { requestId: string; idempotencyKey: string; request: { sessionId: string; skills: string[]; contextRefs: Array<{sessionId:string}> }; context: Array<{sessionId:string;summary:string}> }
+          assert.equal(envelope.idempotencyKey, 'c1')
+          assert.equal(envelope.context[0]?.summary, 'source summary')
           await mkdir(paths.outboxDir, { recursive: true })
-          await writeFile(path.join(paths.outboxDir, `${request.requestId}.json`), JSON.stringify({
-            sessionId: request.request.sessionId,
-            loadedSkills: request.request.skills,
-            referencedSessions: request.request.contextRefs.map(ref => ref.sessionId),
+          await writeFile(path.join(paths.outboxDir, `${envelope.requestId}.json`), JSON.stringify({
+            sessionId: envelope.request.sessionId,
+            loadedSkills: envelope.request.skills,
+            referencedSessions: envelope.request.contextRefs.map(ref => ref.sessionId),
             outputSummary: 'done',
           }), 'utf8')
           return
@@ -53,19 +54,11 @@ test('file bridge dispatch is fail-closed on Skill attestation and returns host 
       }
       throw new Error('worker did not observe bridge request')
     })()
-    const result = await adapter.dispatch({
-      correlationId: 'c1',
-      sessionId: 'wb-session',
-      prompt: 'do work',
-      skills: ['research'],
-      contextRefs: [{ adapterId: WORKBUDDY_ADAPTER_ID, sessionId: 'source' }],
-    })
+    const result = await adapter.dispatch({ correlationId: 'c1', sessionId: 'wb-session', prompt: 'do work', skills: ['research'], contextRefs: [{ adapterId: WORKBUDDY_ADAPTER_ID, sessionId: 'source' }] })
     await worker
     assert.deepEqual(result.loadedSkills, ['research'])
     assert.deepEqual(result.referencedSessions, ['source'])
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
 test('WorkBuddy bridge hooks create durable session and completion event facts', async () => {
@@ -79,9 +72,7 @@ test('WorkBuddy bridge hooks create durable session and completion event facts',
     assert.equal(sessions[0]?.sessionId, 's1')
     assert.equal(sessions[0]?.status, 'idle')
     assert.deepEqual(events.map(event => event.kind), ['session_started', 'turn_completed'])
-  } finally {
-    await rm(root, { recursive: true, force: true })
-  }
+  } finally { await rm(root, { recursive: true, force: true }) }
 })
 
 test('Codex adapter speaks App Server v2 and binds native typed Skills', async () => {
@@ -105,46 +96,17 @@ rl.on('line', line => {
     const skill = input.find(item => item.type === 'skill')
     if (!text.includes('$review') || skill?.name !== 'review' || skill?.path !== '/tmp/review/SKILL.md') return send({ id: msg.id, error: { message: 'missing native skill binding' } })
     send({ id: msg.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } })
-    setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'thr-1', turn: { id: 'turn-1', status: 'completed' } } }), 20)
+    setTimeout(() => send({ method: 'turn/completed', params: { threadId: 'thr-1', turn: { id: 'turn-1', status: 'completed', error: null } } }), 20)
     return
   }
   send({ id: msg.id, error: { message: 'unsupported ' + msg.method } })
 })
 `
-  await writeFile(executable, script, 'utf8')
-  await chmod(executable, 0o755)
-  const adapter = new CodexAgentAdapter({ executable })
+  await writeFile(executable, script, 'utf8'); await chmod(executable, 0o755)
+  const adapter = new CodexAgentAdapter({ executable, requestTimeoutMs: 1_000, turnTimeoutMs: 1_000 })
   try {
-    const sessions = await adapter.listSessions()
-    assert.equal(sessions[0]?.sessionId, 'thr-1')
+    const sessions = await adapter.listSessions(); assert.equal(sessions[0]?.sessionId, 'thr-1')
     const result = await adapter.dispatch({ correlationId: 'c-codex', sessionId: 'thr-1', prompt: 'Review changes', skills: ['review'], contextRefs: [] })
-    assert.deepEqual(result.loadedSkills, ['review'])
-    assert.equal(result.runId, 'turn-1')
-  } finally {
-    await adapter.dispose()
-    await rm(root, { recursive: true, force: true })
-  }
-})
-
-test('OpenCode adapter resolves Skill content and bounded Session context through the V2 client contract', async () => {
-  let prompted = ''
-  const client = {
-    session: {
-      list: async () => [{ id: 'oc-1', title: 'OpenCode test', directory: '/tmp/project', status: 'idle' }],
-      get: async () => ({ id: 'oc-1', directory: '/tmp/project', status: 'idle' }),
-      context: async ({ sessionID }: {sessionID:string}) => sessionID === 'source' ? { messages: ['source context'] } : { messages: ['target result'] },
-      prompt: async ({ text }: {text:string}) => { prompted = text },
-      wait: async () => undefined,
-    },
-    skill: { list: async () => [{ id: 'research', content: 'Follow the research method.' }] },
-    event: { subscribe: async function* () { /* no events in this test */ } },
-  }
-  const adapter = new OpenCodeAgentAdapter({ clientFactory: () => client })
-  const sessions = await adapter.listSessions()
-  assert.equal(sessions[0]?.sessionId, 'oc-1')
-  const result = await adapter.dispatch({ correlationId: 'oc-c1', sessionId: 'oc-1', prompt: 'Analyze', skills: ['research'], contextRefs: [{ adapterId: OPENCODE_ADAPTER_ID, sessionId: 'source', label: 'Source' }] })
-  assert.match(prompted, /<skill name="research">/)
-  assert.match(prompted, /source context/)
-  assert.deepEqual(result.loadedSkills, ['research'])
-  assert.deepEqual(result.referencedSessions, ['source'])
+    assert.deepEqual(result.loadedSkills, ['review']); assert.equal(result.runId, 'turn-1')
+  } finally { await adapter.dispose(); await rm(root, { recursive: true, force: true }) }
 })

@@ -2,27 +2,27 @@
 
 **Flowit Workflow is an agent-agnostic orchestration layer for long-lived Agent sessions.**
 
-It adds four reusable primitives above the host Agent:
+It provides four host-neutral primitives:
 
-- **Durable Schedule Engine** — run a task later or on a fixed cadence.
-- **Pipeline / Work Graph** — move work across sessions and hosts in a DAG.
-- **Skill Binding** — bind named Skills and resolve them at execution time.
+- **Durable Schedule Engine** — run work later or on a fixed cadence.
+- **Pipeline / Work Graph** — move work across sessions/hosts in a DAG.
+- **Skill Binding** — resolve named Skills at execution time.
 - **Context Graph** — pass bounded, read-only context references between sessions.
 
-The Core does not own model configuration, host authentication, transcripts or permission systems. Those remain authoritative in each host through an `AgentAdapter`.
+Host authentication, transcripts, permissions, sandboxes and model configuration remain authoritative in each Agent host.
 
-## Supported hosts
+## Support matrix
 
-| Host | Support | Resume/dispatch | Skill binding | Context | Events |
+| Host | Release level | Dispatch | Skill | Context | Events |
 | --- | --- | --- | --- | --- | --- |
-| DeepSeek Harness | Full reference | native live + cold resume | native | native snapshot | native |
-| Claude Code | Full pilot | public `--resume` path | verified wrapper Skill | bounded summary | Hooks journal |
-| OpenCode V2 | Full | V2 Session client | native Skill catalog | bounded Session context | V2 event stream |
-| Codex | Full | App Server v2 thread/turn API | typed native `skill` input | bounded thread summary | App Server notifications |
-| WorkBuddy | Hybrid | file bridge or configured Managed-Agent/Host driver | WorkBuddy Skill | bounded summary | Hooks/bridge |
-| 豆包办公 | Bridge | host-native Worker only; no public resume assumed | custom Skill | bounded summary | no public event API assumed |
+| DeepSeek Harness | Reference | native live/cold Session | native | native snapshot | native |
+| Claude Code | Pilot | public `--resume` path | verified wrapper Skill | bounded summary | durable Hooks journal |
+| OpenCode V2 | **Experimental** | pinned generated Session API | generated Skill catalog | bounded Session context | generated event stream |
+| Codex | **Experimental** | App Server v2 thread/turn API | typed `skill` item | bounded thread summary | App Server notifications |
+| WorkBuddy | Hybrid | bridge or configured enterprise driver | WorkBuddy Skill | bounded summary | Hooks/bridge |
+| 豆包办公 | Bridge | host Worker only; no public Session resume claimed | custom Skill | bounded summary | no public event API claimed |
 
-See [Host adapters](docs/host-adapters.md) for the exact capability boundary.
+OpenCode and Codex remain **Experimental** until pinned host-contract tests and real hosted E2E execute successfully.
 
 ## Architecture
 
@@ -31,220 +31,214 @@ See [Host adapters](docs/host-adapters.md) for the exact capability boundary.
                                   │
         ┌─────────────────────────┼─────────────────────────┐
         │                         │                         │
- Schedule Engine            Pipeline / Work Graph      Context Graph
+ Durable Schedule            Pipeline / Work Graph     Context Graph
         │                         │                         │
         └────────────────── Skill Binding ─────────────────┘
                                   │
                          AgentAdapter contract
                                   │
-     ┌───────────┬───────────┬────┴────┬────────────┬─────────────┐
-     │           │           │         │            │             │
-    DSH      Claude Code  OpenCode    Codex      WorkBuddy    豆包办公
-   Full         Full        Full       Full        Hybrid       Bridge
+  DSH / Claude / OpenCode / Codex / WorkBuddy / 豆包办公 / future hosts
 ```
 
-A task or Pipeline node stores orchestration references, not copied Skill bodies or whole transcripts:
+Workflow definitions store references, not copied Skill bodies or entire transcripts.
+
+## Durable execution semantics
+
+Flowit uses **at-least-once** execution semantics. It does not claim generic exactly-once side effects.
+
+### Schedule occurrences
+
+A Schedule occurrence is claimed only in a Store transaction that simultaneously verifies:
+
+```text
+Schedule exists
+status == active
+nextRunAt == expected occurrence
+trigger is still claimable
+```
+
+A claimed run carries owner/lease/heartbeat state. Failed work may retry; stale running work may be reclaimed; Pipeline node checkpoints survive attempts.
+
+### Event Pipeline admission
+
+Host event receipt and Pipeline business execution are deliberately separated:
+
+```text
+host event arrives
+      ↓
+match active Pipelines
+      ↓
+ONE Store transaction
+persist eventInbox rows for every matching Pipeline
+      ↓
+host listener may return
+      ↓
+worker claims durable admission → running lease
+      ↓
+execute / retry / checkpoint
+```
+
+Therefore an event queued behind a long-running Pipeline is not only an in-memory Promise. If the daemon exits after admission but before execution, the next Core instance sees `eventInbox` and resumes it.
+
+A failing Pipeline is isolated from siblings matching the same event. OpenCode event consumption reconnects with bounded exponential backoff after stream failure, but reconnect is not used as a substitute for Flowit's own durable admission.
+
+### Terminal dedupe retention
+
+`runs[]` is bounded audit/recovery history. Terminal Pipeline receipts are stored separately, but are also intentionally bounded instead of growing forever.
+
+Defaults:
+
+```text
+maxTerminalReceipts = 100000
+terminalReceiptRetentionMs = 90 days
+```
+
+The earliest limit reached may evict an old event receipt. Active Schedule-occurrence receipts needed to close the crash-after-complete/before-advance window are protected until the Schedule advances. This means old event replay deduplication is a **bounded retention guarantee**, not permanent exactly-once delivery.
+
+## Adapter lifecycle and daemon readiness
+
+`AgentAdapter` may implement:
 
 ```ts
-{
-  adapterId: 'codex',
-  sessionId: 'thread-id',
-  prompt: 'Review the implementation',
-  skills: ['code-review'],
-  contextRefs: [
-    { adapterId: 'codex', sessionId: 'research-thread' }
-  ]
-}
+start?(signal?: AbortSignal): Promise<void> | void
 ```
 
-## Install and build
+Lifecycle state is tracked per registered Adapter instance, not only by string ID. Unregistering an Adapter aborts that generation; registering another Adapter with the same ID gets a new lifecycle. Control-plane host operations lazily call Adapter startup before `listSessions`/dispatch.
+
+For an active daemon, `core.ready` means:
+
+1. durable storage load/migration succeeded;
+2. enabled Adapter preflights succeeded;
+3. Pipeline event subscriptions were attached;
+4. recoverable work was reconciled;
+5. Scheduler startup completed.
+
+`dispose()` aborts startup before stopping workers and disposing adapters. OpenCode startup passes the abort signal to its service request; Codex startup passes it into App Server initialization and terminates the child on cancellation.
+
+Detached startup uses an atomic readiness file. Partial JSON is treated as not-yet-published state. On readiness failure/timeout the parent sends `SIGTERM`, waits a bounded grace period, then escalates to `SIGKILL` (process-group signalling on POSIX) if the child still exists. A stale storage daemon lease is subsequently recoverable from its dead PID.
+
+MCP `daemon_start` delegates to this same CLI `--detach` lifecycle.
+
+## v0.3 → v0.4 storage migration
+
+v0.4 default state is:
+
+```text
+~/.flowit-workflow/instances/<instanceId>/workflow.json
+```
+
+v0.3 stored state by default Adapter:
+
+```text
+~/.flowit-workflow/<adapterId>/workflow.json
+```
+
+For `instanceId=default` without an explicitly configured storage path, Flowit scans **all built-in legacy Adapter paths**, not only the current default Adapter.
+
+Migration rules:
+
+```text
+no non-empty legacy DBs             → normal new storage
+one non-empty legacy DB              → migrate + archive legacy
+multiple semantically equal DBs      → migrate once + archive all
+multiple different non-empty DBs     → fail closed
+new non-empty DB differs from legacy → fail closed
+```
+
+State equivalence uses structured deep equality, not JSON property order.
+
+Migration acquires the legacy v0.3 `daemon.pid` paths with the same `open(..., 'wx')` ownership primitive used by v0.3 before touching legacy database files. A live old daemon therefore blocks migration, while the migration guard prevents an old daemon from starting in the check/use gap.
+
+For explicit/offline migration:
 
 ```bash
-pnpm install
-pnpm build
+flowit-workflow migrate --instance=default
+flowit-workflow migrate --instance=default \
+  --legacy-storage=/path/a/workflow.json \
+  --legacy-storage=/path/b/workflow.json
 ```
 
-OpenCode additionally needs its V2 client in the runtime environment:
-
-```bash
-pnpm add @opencode-ai/client@beta
-```
+`FLOWIT_WORKFLOW_LEGACY_STORAGE_FILES` can also provide explicit legacy paths. Explicit `FLOWIT_WORKFLOW_STORAGE_FILE` does not trigger automatic legacy discovery.
 
 ## Generic control plane
 
-The CLI and MCP server now select a built-in adapter through environment/configuration:
-
 ```bash
-FLOWIT_WORKFLOW_ADAPTER=codex flowit-workflow sessions --adapter=codex
-FLOWIT_WORKFLOW_ADAPTER=opencode flowit-workflow daemon --adapter=opencode --detach
-FLOWIT_WORKFLOW_ADAPTERS=opencode,codex flowit-workflow daemon --adapter=opencode --adapters=opencode,codex
+FLOWIT_WORKFLOW_INSTANCE_ID=research \
+FLOWIT_WORKFLOW_ADAPTER=codex \
+flowit-workflow daemon --adapter=codex --instance=research --detach
+
+FLOWIT_WORKFLOW_ADAPTERS=opencode,codex \
+flowit-workflow daemon --adapter=opencode --adapters=opencode,codex
 ```
 
-Mutation-capable MCP tools remain disabled unless explicitly enabled:
+Mutation-capable MCP tools remain opt-in with `FLOWIT_WORKFLOW_MUTATIONS=1`.
 
-```bash
-FLOWIT_WORKFLOW_MUTATIONS=1
-```
+## OpenCode V2 — Experimental
 
-The old `FLOWIT_WORKFLOW_CLAUDE_MUTATIONS=1` variable remains accepted for Claude compatibility.
-
-## OpenCode V2
-
-Flowit uses the documented V2 generated client. It can connect to an existing OpenCode server:
-
-```bash
-FLOWIT_WORKFLOW_ADAPTER=opencode \
-FLOWIT_WORKFLOW_OPENCODE_URL=http://localhost:4096 \
-flowit-workflow daemon --adapter=opencode
-```
-
-If no URL is provided, the adapter uses `@opencode-ai/client/service` `Service.ensure()` to obtain a compatible local service. Requested Skills are resolved from OpenCode's Skill catalog at the target Session location before the task is sent. Event pipelines consume the OpenCode event stream.
-
-To expose Flowit tools inside OpenCode, copy/merge [the example V2 MCP configuration](integrations/opencode/opencode.jsonc.example).
-
-OpenCode V2 is currently beta, so all OpenCode-specific code stays isolated in `src/adapters/opencode.ts` and can evolve without changing Core.
-
-## Codex
-
-Flowit launches the documented:
+Flowit follows the pinned generated plural client contract:
 
 ```text
-codex app-server --stdio
+OpenCode.make(...)
+client.sessions.*
+client.skills.*
+client.events.*
 ```
 
-and uses v2 `thread/list`, `thread/resume`, `thread/read`, `turn/start`, `turn/completed` and `skills/list`. Requested Skills are passed as native typed `skill` turn items and named with `$skill-name` in the user text.
+There is no `/service` runtime import. `FLOWIT_WORKFLOW_OPENCODE_URL` is required. The Adapter preserves host event `id`, then durable aggregate/sequence identity, then a deterministic canonical-content hash. Deprecated `session.idle` and current `session.status` idle both normalize to `turn_completed`.
 
-```bash
-FLOWIT_WORKFLOW_ADAPTER=codex flowit-workflow daemon --adapter=codex
-```
+`start(signal)` preflights the service with that signal. Unexpected SSE termination reconnects with bounded exponential backoff.
 
-Use [the Codex MCP example](integrations/codex/config.toml.example) to make Flowit Workflow tools callable from Codex. MCP is the control plane; App Server is the execution adapter.
+## Codex — Experimental
 
-## WorkBuddy
-
-Flowit supports two WorkBuddy paths.
-
-### Desktop bridge
-
-WorkBuddy's Claude-compatible Hooks can publish Session lifecycle facts into Flowit:
-
-1. Merge [the Hook example](integrations/workbuddy/settings.json.example) into `.codebuddy/settings.json`.
-2. Configure [the Flowit MCP server](integrations/workbuddy/mcp.json.example) in WorkBuddy if you want Workflow tools inside the Agent.
-3. Install/import [the Flowit bridge worker Skill](integrations/workbuddy/flowit-bridge-worker/SKILL.md).
-4. Authorize `~/.flowit-workflow/bridges/workbuddy/`.
-5. For unattended desktop polling, bind that Skill to a WorkBuddy native Automation.
-
-The bridge uses an inbox/outbox protocol and requires the host worker to attest every requested Skill actually loaded.
-
-### Managed Agent / Host driver
-
-For enterprise WMA or a maintained Host CLI wrapper, configure a driver command rather than hard-coding undocumented cloud endpoints:
-
-```bash
-export FLOWIT_WORKFLOW_WORKBUDDY_DRIVER='["node","/opt/company/workbuddy-flowit-driver.mjs"]'
-flowit-workflow daemon --adapter=workbuddy
-```
-
-Flowit sends one normalized dispatch JSON on stdin and expects one `AgentDispatchResult` JSON on stdout. When this driver is configured, the WorkBuddy adapter advertises cold-resume capability.
-
-## 豆包办公
-
-Flowit intentionally uses a constrained Bridge Adapter because a stable public Session/Resume developer API has not been established as part of this integration.
-
-1. Install/import [the bridge worker Skill](integrations/doubao-office/flowit-bridge-worker/SKILL.md) into豆包办公任务模式.
-2. Authorize `~/.flowit-workflow/bridges/doubao-office/`.
-3. Use豆包原生定时任务 to invoke the worker periodically if unattended processing is desired.
-
-The adapter reports `coldResume=false`, `liveDispatch=false`, and `eventSubscription=false`; Flowit will not pretend that product UI features are programmatic Session APIs.
-
-## Claude Code pilot
-
-The repository remains a Claude Code plugin root:
+Flowit uses:
 
 ```text
-.claude-plugin/plugin.json
-hooks/hooks.json
-.mcp.json
-skills/
-  run-bound/SKILL.md
-  orchestrate/SKILL.md
+codex app-server --listen stdio://
 ```
+
+The client handles responses, notifications and server-initiated requests; JSON-RPC IDs are `string | number`; unattended approval defaults fail closed; only `completed` is success. Request/turn deadlines, `turn/interrupt`, process-exit rejection and forced shutdown remain enabled. App Server initialization is part of `start(signal)` and therefore part of active daemon readiness.
+
+## Bridge protocol v2
+
+Bridge transport ownership (`requestId`) and side-effect ownership (`idempotencyKey`) are separate. Renew/release/expired takeover of an execution lease are serialized by a short per-key mutation mutex, and an expired old owner cannot renew itself.
+
+Shared receipts are now versioned **completed-only** records:
+
+```json
+{
+  "version": 1,
+  "idempotencyKey": "...",
+  "status": "completed",
+  "completedAt": "...",
+  "result": {}
+}
+```
+
+A successful receipt is fully written to a temporary file, flushed, then atomically published to the final path with no-replace semantics. Malformed/wrong-key receipts are quarantined and do not poison future attempts. Retryable failures are written only to the current request outbox; they never become a shared terminal receipt.
+
+Successful receipt replay also restores the Session summary catalog before returning, so a crash after receipt publication but before `sessions.json` update does not break downstream Context references.
+
+See `integrations/bridge/PROTOCOL.md`.
+
+## DeepSeek Harness / Claude Code
+
+The DSH reference remains available from `@coaseedge/flowit-workflow/dsh`. The repository also remains a Claude Code plugin root with Hooks, MCP and bound-run Skills.
+
+## Development and release evidence
 
 ```bash
-FLOWIT_WORKFLOW_CLAUDE_MUTATIONS=1 claude --plugin-dir .
-flowit-workflow claude-daemon --detach
-```
-
-The Claude adapter rejects external resume of a Session still marked live by default, uses a durable Hook journal/cursor, and requires schema-valid Skill-binding attestation.
-
-## DeepSeek Harness
-
-The original reference implementation remains available from the DSH subpath:
-
-```ts
-import * as flowitWorkflow from '@coaseedge/flowit-workflow/dsh'
-```
-
-It retains native `ctx.agents.resume()`, `ctx.skills`, immutable `dsh-session:` context references, and DSH Session events.
-
-## Bridge protocol
-
-WorkBuddy desktop and豆包办公 share a host-neutral bridge protocol under:
-
-```text
-~/.flowit-workflow/bridges/<adapter-id>/
-  sessions.json
-  events.jsonl
-  events.cursor
-  inbox/
-  outbox/
-```
-
-See [Bridge protocol](integrations/bridge/PROTOCOL.md). The bridge is a deliberate compatibility layer, not an attempt to reverse-engineer a private API.
-
-## Core API
-
-```ts
-import { FlowitOrchestrationCore } from '@coaseedge/flowit-workflow/core'
-import { CodexAgentAdapter } from '@coaseedge/flowit-workflow/adapters/codex'
-
-const core = new FlowitOrchestrationCore({
-  defaultAdapterId: 'codex',
-  storageFile: '.flowit-workflow/workflow.json',
-}, [new CodexAgentAdapter()])
-```
-
-Important services:
-
-```text
-core.adapters
-core.dispatcher
-core.scheduler
-core.pipelines
-core.contextGraph
-core.skillBinder
-```
-
-## Adding another Agent
-
-Implement the stable host boundary instead of adding host imports to Core. A new adapter must fail closed for unsupported capabilities and preserve the host's own permission/sandbox authority.
-
-## Development
-
-```bash
+pnpm install
 pnpm typecheck
 pnpm test
+pnpm test:host-contracts
 pnpm build
 ```
 
-## Current limitations
+Unit/recovery tests live in `tests/*.test.ts`; host contract tests live separately in `tests/contracts/*.test.ts`.
 
-- Cross-adapter Context Bridge is still deferred; foreign-host context refs fail closed unless deliberately projected.
-- OpenCode V2's client/plugin APIs are beta and may require adapter-only updates.
-- WorkBuddy WMA integration is a driver seam until a stable public endpoint/SDK contract is pinned and tested in this repository.
-- 豆包办公 is Bridge-level support; no public cold Session resume/event API is claimed.
-- The durable worker is a user-space daemon, not an OS service manager.
-- Hosted GitHub Actions in this account may report a failed job with zero executed steps; that is not treated as code validation.
+The repository still does **not** contain `pnpm-lock.yaml`. CI therefore has two distinct signals: a non-frozen code-validation job and a `release-lockfile` gate that requires a real lockfile plus `pnpm install --frozen-lockfile`. A reviewed lockfile is still a merge/release requirement.
+
+GitHub-hosted Actions for this repository have also failed before runner allocation (`runner_id=0`, `steps=[]`) in prior heads. Such runs are neither passing evidence nor code-failure evidence. Do not treat this PR as release-ready until a working runner executes the validation chain and the lockfile gate is green.
 
 ## License
 
