@@ -13,6 +13,11 @@ interface FileLockOwner {
   acquiredAt: string
 }
 
+type AcquisitionResult =
+  | { kind: 'acquired'; owner: FileLockOwner }
+  | { kind: 'busy' }
+  | { kind: 'retry' }
+
 export async function withFailClosedMutex<T>(
   lockDir: string,
   operation: () => Promise<T>,
@@ -54,43 +59,49 @@ export async function withGenerationFileLock<T>(
   let owner: FileLockOwner | undefined
 
   while (Date.now() < deadline) {
-    const candidate: FileLockOwner = {
-      version: 1,
-      token: randomUUID(),
-      pid: process.pid,
-      acquiredAt: new Date().toISOString(),
-    }
-    try {
-      await mkdir(lockDir)
-      try {
-        await writeOwner(lockDir, candidate)
-      } catch (error) {
-        await rm(lockDir, { recursive: true, force: true }).catch(() => undefined)
-        throw error
-      }
-      owner = candidate
-      break
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
-
     const remaining = Math.max(1, deadline - Date.now())
-    const recovered = await withFailClosedMutex(
+    const result = await withFailClosedMutex(
       mutationDir,
-      async () => {
+      async (): Promise<AcquisitionResult> => {
         const descriptor = await inspectLock(lockDir)
-        if (descriptor.kind === 'missing') return true
-        if (descriptor.kind === 'legacy-file') return false
-        if (descriptor.owner) {
-          if (isProcessAlive(descriptor.owner.pid)) return false
-          return moveAside(lockDir, `stale.${descriptor.owner.token}`)
+        if (descriptor.kind === 'missing') {
+          const candidate: FileLockOwner = {
+            version: 1,
+            token: randomUUID(),
+            pid: process.pid,
+            acquiredAt: new Date().toISOString(),
+          }
+          try {
+            await mkdir(lockDir)
+          } catch (error: unknown) {
+            if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { kind: 'retry' }
+            throw error
+          }
+          try {
+            await writeOwner(lockDir, candidate)
+          } catch (error) {
+            await rm(lockDir, { recursive: true, force: true }).catch(() => undefined)
+            throw error
+          }
+          return { kind: 'acquired', owner: candidate }
         }
-        if (descriptor.ageMs < INITIALIZATION_GRACE_MS) return false
-        return moveAside(lockDir, 'uninitialized')
+        if (descriptor.kind === 'legacy-file') return { kind: 'busy' }
+        if (descriptor.owner) {
+          if (isProcessAlive(descriptor.owner.pid)) return { kind: 'busy' }
+          await moveAside(lockDir, `stale.${descriptor.owner.token}`)
+          return { kind: 'retry' }
+        }
+        if (descriptor.ageMs < INITIALIZATION_GRACE_MS) return { kind: 'busy' }
+        await moveAside(lockDir, 'uninitialized')
+        return { kind: 'retry' }
       },
       remaining,
     )
-    if (recovered) continue
+    if (result.kind === 'acquired') {
+      owner = result.owner
+      break
+    }
+    if (result.kind === 'retry') continue
     await sleep(POLL_MS)
   }
 
