@@ -1,22 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { OpenCode } from '@opencode-ai/client'
+import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 import { OpenCodeAgentAdapter, mapOpenCodeEvent } from '../../src/adapters/opencode.js'
 
-test('pinned OpenCode generated client exposes the V2 resources used by Flowit', () => {
-  const client = OpenCode.make({ baseUrl: 'http://example.invalid' })
-  assert.equal(typeof client.sessions.list, 'function')
-  assert.equal(typeof client.sessions.get, 'function')
-  assert.equal(typeof client.sessions.active, 'function')
-  assert.equal(typeof client.sessions.prompt, 'function')
-  assert.equal(typeof client.sessions.wait, 'function')
-  assert.equal(typeof client.sessions.context, 'function')
-  assert.equal(typeof client.skills.list, 'function')
-  assert.equal(typeof client.events.subscribe, 'function')
+test('pinned official OpenCode SDK exposes the V2 resources used by Flowit', () => {
+  const client = createOpencodeClient({ baseUrl: 'http://example.invalid' })
+  assert.equal(typeof client.v2.session.list, 'function')
+  assert.equal(typeof client.v2.session.get, 'function')
+  assert.equal(typeof client.v2.session.active, 'function')
+  assert.equal(typeof client.v2.session.prompt, 'function')
+  assert.equal(typeof client.v2.session.wait, 'function')
+  assert.equal(typeof client.v2.session.context, 'function')
+  assert.equal(typeof client.v2.skill.list, 'function')
+  assert.equal(typeof client.v2.event.subscribe, 'function')
 })
 
 test('OpenCode host event ids remain stable across duplicate delivery', () => {
-  const raw = { id: 'evt-stable-1', type: 'session.idle', data: { sessionID: 's1' } } as any
+  const raw = { id: 'evt-stable-1', type: 'session.idle', data: { sessionID: 's1' } }
   const first = mapOpenCodeEvent(raw)
   const replay = mapOpenCodeEvent(structuredClone(raw))
   assert.equal(first?.eventId, 'evt-stable-1')
@@ -24,17 +24,23 @@ test('OpenCode host event ids remain stable across duplicate delivery', () => {
   assert.equal(first?.kind, 'turn_completed')
 })
 
-test('session.status idle maps to turn_completed and durable identity is deterministic', () => {
-  const raw = { type: 'session.status', data: { sessionID: 's2', status: { type: 'idle' } }, durable: { aggregateID: 'session-s2', seq: 41 } } as any
-  const event = mapOpenCodeEvent(raw)
-  assert.equal(event?.kind, 'turn_completed')
-  assert.equal(event?.sessionId, 's2')
-  assert.equal(event?.eventId, 'session-s2:41')
+test('official SDK property events and durable data events both normalize correctly', () => {
+  const current = { id: 'evt-status', type: 'session.status', properties: { sessionID: 's2', status: { type: 'idle' } } }
+  const currentEvent = mapOpenCodeEvent(current)
+  assert.equal(currentEvent?.kind, 'turn_completed')
+  assert.equal(currentEvent?.sessionId, 's2')
+  assert.equal(currentEvent?.eventId, 'evt-status')
+
+  const durable = { type: 'session.status', data: { sessionID: 's2', status: { type: 'idle' } }, durable: { aggregateID: 'session-s2', seq: 41 } }
+  const durableEvent = mapOpenCodeEvent(durable)
+  assert.equal(durableEvent?.kind, 'turn_completed')
+  assert.equal(durableEvent?.sessionId, 's2')
+  assert.equal(durableEvent?.eventId, 'session-s2:41')
 })
 
 test('event fallback never depends on wall clock or object key order', () => {
-  const firstRaw = { type: 'session.idle', data: { sessionID: 's3', detail: { b: 2, a: 1 } }, location: { directory: '/tmp/project', workspace: 'w' } } as any
-  const reordered = { location: { workspace: 'w', directory: '/tmp/project' }, data: { detail: { a: 1, b: 2 }, sessionID: 's3' }, type: 'session.idle' } as any
+  const firstRaw = { type: 'session.idle', data: { sessionID: 's3', detail: { b: 2, a: 1 } }, location: { directory: '/tmp/project', workspace: 'w' } }
+  const reordered = { location: { workspace: 'w', directory: '/tmp/project' }, data: { detail: { a: 1, b: 2 }, sessionID: 's3' }, type: 'session.idle' }
   const first = mapOpenCodeEvent(firstRaw)
   const second = mapOpenCodeEvent(reordered)
   assert.equal(first?.eventId, second?.eventId)
@@ -45,25 +51,29 @@ test('adapter startup preflights the host and event stream reconnects after fail
   let activeCalls = 0
   let subscriptions = 0
   const client = {
-    sessions: {
-      active: async () => { activeCalls += 1; return {} },
-    },
-    skills: {},
-    events: {
-      subscribe: ({ signal }: { signal: AbortSignal }) => {
-        subscriptions += 1
-        const attempt = subscriptions
-        return (async function* () {
-          if (attempt === 1) {
-            yield { id: 'evt-one', type: 'session.idle', data: { sessionID: 'source' } }
-            throw new Error('stream dropped')
+    v2: {
+      session: {
+        active: async () => { activeCalls += 1; return { data: {} } },
+      },
+      skill: {},
+      event: {
+        subscribe: async ({ signal }: { signal: AbortSignal }) => {
+          subscriptions += 1
+          const attempt = subscriptions
+          return {
+            stream: (async function* () {
+              if (attempt === 1) {
+                yield { id: 'evt-one', type: 'session.idle', data: { sessionID: 'source' } }
+                throw new Error('stream dropped')
+              }
+              yield { id: 'evt-two', type: 'session.status', properties: { sessionID: 'source', status: { type: 'idle' } } }
+              await new Promise<void>(resolve => {
+                if (signal.aborted) { resolve(); return }
+                signal.addEventListener('abort', () => resolve(), { once: true })
+              })
+            })(),
           }
-          yield { id: 'evt-two', type: 'session.status', data: { sessionID: 'source', status: { type: 'idle' } } }
-          await new Promise<void>(resolve => {
-            if (signal.aborted) { resolve(); return }
-            signal.addEventListener('abort', () => resolve(), { once: true })
-          })
-        })()
+        },
       },
     },
   } as any
