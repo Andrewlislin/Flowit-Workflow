@@ -1,0 +1,40 @@
+{
+  "name": "@coaseedge/flowit-adapter-opencode",
+  "version": "0.4.0",
+  "description": "OpenCode V2 adapter for Flowit Workflow.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@coaseedge/flowit-core": "workspace:*",
+    "@opencode-ai/sdk": "1.18.23"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Andrewlislin/Flowit-Workflow.git",
+    "directory": "packages/adapter-opencode"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

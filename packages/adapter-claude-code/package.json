@@ -1,0 +1,55 @@
+{
+  "name": "@coaseedge/flowit-adapter-claude-code",
+  "version": "0.4.0",
+  "description": "Claude Code adapter for Flowit Workflow.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./hook": {
+      "types": "./dist/claude/hook.d.ts",
+      "default": "./dist/claude/hook.js"
+    },
+    "./runtime": {
+      "types": "./dist/claude/runtime.d.ts",
+      "default": "./dist/claude/runtime.js"
+    },
+    "./state": {
+      "types": "./dist/claude/state.d.ts",
+      "default": "./dist/claude/state.js"
+    },
+    "./claude": {
+      "types": "./dist/claude/index.d.ts",
+      "default": "./dist/claude/index.js"
+    }
+  },
+  "dependencies": {
+    "@coaseedge/flowit-core": "workspace:*"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Andrewlislin/Flowit-Workflow.git",
+    "directory": "packages/adapter-claude-code"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

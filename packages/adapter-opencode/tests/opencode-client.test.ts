@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
-import { OpenCodeAgentAdapter, mapOpenCodeEvent } from '../../src/adapters/opencode.js'
+import { OpenCodeAgentAdapter, mapOpenCodeEvent } from '../src/index.js'
 
 test('pinned official OpenCode SDK exposes the V2 resources used by Flowit', () => {
   const client = createOpencodeClient({ baseUrl: 'http://example.invalid' })

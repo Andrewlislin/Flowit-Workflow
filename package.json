@@ -1,70 +1,120 @@
 {
   "name": "@coaseedge/flowit-workflow",
   "version": "0.4.0",
-  "description": "Agent-agnostic orchestration core with durable scheduling, pipeline graphs, Skill binding, context flow, and host adapters.",
+  "description": "Batteries-included Flowit Workflow distribution aggregating the host-agnostic core and built-in adapters.",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-    "./core": { "types": "./dist/core/index.d.ts", "default": "./dist/core/index.js" },
-    "./claude-code": { "types": "./dist/claude/index.d.ts", "default": "./dist/claude/index.js" },
-    "./adapters/claude-code": { "types": "./dist/adapters/claude-code.d.ts", "default": "./dist/adapters/claude-code.js" },
-    "./adapters/opencode": { "types": "./dist/adapters/opencode.d.ts", "default": "./dist/adapters/opencode.js" },
-    "./adapters/codex": { "types": "./dist/adapters/codex.d.ts", "default": "./dist/adapters/codex.js" },
-    "./adapters/workbuddy": { "types": "./dist/adapters/workbuddy.d.ts", "default": "./dist/adapters/workbuddy.js" },
-    "./adapters/doubao-office": { "types": "./dist/adapters/doubao-office.d.ts", "default": "./dist/adapters/doubao-office.js" },
-    "./adapters/file-bridge": { "types": "./dist/adapters/file-bridge.d.ts", "default": "./dist/adapters/file-bridge.js" },
-    "./runtime-factory": { "types": "./dist/runtime-factory.d.ts", "default": "./dist/runtime-factory.js" },
-    "./adapters/dsh": { "types": "./dist/adapters/dsh.d.ts", "default": "./dist/adapters/dsh.js" },
-    "./dsh": { "types": "./dist/dsh/plugin.d.ts", "default": "./dist/dsh/plugin.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "default": "./dist/core/index.js"
+    },
+    "./claude-code": {
+      "types": "./dist/claude/index.d.ts",
+      "default": "./dist/claude/index.js"
+    },
+    "./adapters/claude-code": {
+      "types": "./dist/adapters/claude-code.d.ts",
+      "default": "./dist/adapters/claude-code.js"
+    },
+    "./adapters/opencode": {
+      "types": "./dist/adapters/opencode.d.ts",
+      "default": "./dist/adapters/opencode.js"
+    },
+    "./adapters/codex": {
+      "types": "./dist/adapters/codex.d.ts",
+      "default": "./dist/adapters/codex.js"
+    },
+    "./adapters/workbuddy": {
+      "types": "./dist/adapters/workbuddy.d.ts",
+      "default": "./dist/adapters/workbuddy.js"
+    },
+    "./adapters/doubao-office": {
+      "types": "./dist/adapters/doubao-office.d.ts",
+      "default": "./dist/adapters/doubao-office.js"
+    },
+    "./adapters/file-bridge": {
+      "types": "./dist/adapters/file-bridge.d.ts",
+      "default": "./dist/adapters/file-bridge.js"
+    },
+    "./runtime-factory": {
+      "types": "./dist/runtime-factory.d.ts",
+      "default": "./dist/runtime-factory.js"
+    },
+    "./adapters/dsh": {
+      "types": "./dist/adapters/dsh.d.ts",
+      "default": "./dist/adapters/dsh.js"
+    },
+    "./dsh": {
+      "types": "./dist/dsh/plugin.d.ts",
+      "default": "./dist/dsh/plugin.js"
+    }
   },
-  "bin": { "flowit-workflow": "dist/cli.js" },
-  "files": ["dist", ".claude-plugin", ".mcp.json", "hooks", "skills", "integrations", "assets", "README.md", "LICENSE", "NOTICE"],
-  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "bin": {
+    "flowit-workflow": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    ".claude-plugin",
+    ".mcp.json",
+    "hooks",
+    "skills",
+    "integrations",
+    "assets",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "format": "biome format --write src/dsh/tools.ts",
-    "format:check": "biome format src/dsh/tools.ts",
-    "lint": "biome lint src/dsh/tools.ts",
-    "check:style": "biome ci --reporter=github src/dsh/tools.ts",
-    "test": "node --import tsx --test tests/*.test.ts",
-    "test:host-contracts": "node --import tsx --test tests/contracts/*.test.ts",
+    "build": "pnpm run build:packages && pnpm run build:root",
+    "typecheck": "pnpm run build:packages && pnpm run typecheck:root",
+    "format": "biome format --write packages/adapter-dsh/src/dsh/tools.ts",
+    "format:check": "biome format packages/adapter-dsh/src/dsh/tools.ts",
+    "lint": "biome lint packages/adapter-dsh/src/dsh/tools.ts",
+    "check:style": "biome ci --reporter=github packages/adapter-dsh/src/dsh/tools.ts",
+    "test": "pnpm run build && pnpm run test:raw",
+    "test:host-contracts": "pnpm run build && pnpm run test:host-contracts:raw",
     "check:supply-chain": "node scripts/check-dependency-sources.mjs",
-    "check": "npm run check:supply-chain && npm run check:style && npm run typecheck && npm run test && npm run test:host-contracts",
-    "prepare": "npm run build"
-  },
-  "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-llm": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-session": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-session-persistence": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-session-reference": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
-    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.1",
-    "@opencode-ai/sdk": "1.18.23"
-  },
-  "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true },
-    "@deepseek-ai/dsh-agent": { "optional": true },
-    "@deepseek-ai/dsh-llm": { "optional": true },
-    "@deepseek-ai/dsh-session": { "optional": true },
-    "@deepseek-ai/dsh-session-persistence": { "optional": true },
-    "@deepseek-ai/dsh-session-reference": { "optional": true },
-    "@deepseek-ai/dsh-skill": { "optional": true },
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/schemastery": { "optional": true },
-    "@opencode-ai/sdk": { "optional": true }
+    "check": "npm run check:supply-chain && npm run check:package-boundaries && npm run check:style && npm run build && npm run check:pack && npm run typecheck:root && npm run test:raw && npm run test:host-contracts:raw",
+    "prepare": "npm run build",
+    "build:packages": "pnpm --filter './packages/**' -r build",
+    "build:root": "tsc -p tsconfig.json",
+    "typecheck:root": "tsc -p tsconfig.json --noEmit",
+    "test:raw": "node --import tsx --test tests/*.test.ts",
+    "test:host-contracts:raw": "node --import tsx --test tests/contracts/*.test.ts",
+    "check:package-boundaries": "node scripts/check-package-boundaries.mjs",
+    "check:pack": "node scripts/check-package-packs.mjs",
+    "test:opencode-contract": "node --import tsx --test packages/adapter-opencode/tests/opencode-client.test.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@types/node": "^22.20.0",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3",
+    "typescript": "^6.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Andrewlislin/Flowit-Workflow.git"
+  },
+  "packageManager": "pnpm@11.7.0",
+  "dependencies": {
+    "@coaseedge/flowit-core": "workspace:*",
+    "@coaseedge/flowit-adapter-claude-code": "workspace:*",
+    "@coaseedge/flowit-adapter-opencode": "workspace:*",
+    "@coaseedge/flowit-adapter-codex": "workspace:*",
+    "@coaseedge/flowit-adapter-dsh": "workspace:*",
+    "@coaseedge/flowit-adapter-file-bridge": "workspace:*",
+    "@coaseedge/flowit-adapter-workbuddy": "workspace:*",
+    "@coaseedge/flowit-adapter-doubao-office": "workspace:*",
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-llm": "^0.1.1-rc.2",
@@ -73,12 +123,6 @@
     "@deepseek-ai/dsh-session-reference": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-skill": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
-    "@deepseek-ai/schemastery": "^3.18.1",
-    "@opencode-ai/sdk": "1.18.23"
-  },
-  "repository": { "type": "git", "url": "git+https://github.com/Andrewlislin/Flowit-Workflow.git" },
-  "packageManager": "pnpm@11.7.0",
-  "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "@deepseek-ai/schemastery": "^3.18.1"
   }
 }

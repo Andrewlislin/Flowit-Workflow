@@ -7,10 +7,31 @@ settings:
 importers:
 
   .:
-    devDependencies:
-      '@biomejs/biome':
-        specifier: 2.5.10
-        version: 2.5.10
+    dependencies:
+      '@coaseedge/flowit-adapter-claude-code':
+        specifier: workspace:*
+        version: link:packages/adapter-claude-code
+      '@coaseedge/flowit-adapter-codex':
+        specifier: workspace:*
+        version: link:packages/adapter-codex
+      '@coaseedge/flowit-adapter-doubao-office':
+        specifier: workspace:*
+        version: link:packages/adapter-doubao-office
+      '@coaseedge/flowit-adapter-dsh':
+        specifier: workspace:*
+        version: link:packages/adapter-dsh
+      '@coaseedge/flowit-adapter-file-bridge':
+        specifier: workspace:*
+        version: link:packages/adapter-file-bridge
+      '@coaseedge/flowit-adapter-opencode':
+        specifier: workspace:*
+        version: link:packages/adapter-opencode
+      '@coaseedge/flowit-adapter-workbuddy':
+        specifier: workspace:*
+        version: link:packages/adapter-workbuddy
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:packages/core
       '@deepseek-ai/cordis':
         specifier: ^4.0.1
         version: 4.0.1
@@ -38,9 +59,10 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.1
         version: 3.18.1
-      '@opencode-ai/sdk':
-        specifier: 1.18.23
-        version: 1.18.23
+    devDependencies:
+      '@biomejs/biome':
+        specifier: 2.5.10
+        version: 2.5.10
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1
@@ -50,6 +72,86 @@ importers:
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
+
+  packages/adapter-claude-code:
+    dependencies:
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-codex:
+    dependencies:
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-doubao-office:
+    dependencies:
+      '@coaseedge/flowit-adapter-file-bridge':
+        specifier: workspace:*
+        version: link:../adapter-file-bridge
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-dsh:
+    dependencies:
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:../core
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.1
+        version: 4.0.1
+      '@deepseek-ai/dsh-agent':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(c1537a8836b04097f168b024f1e38d85)
+      '@deepseek-ai/dsh-llm':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-attachment@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-timeout@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))
+      '@deepseek-ai/dsh-session':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc)
+      '@deepseek-ai/dsh-session-persistence':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-session@0.1.1-rc.2(a4e4bb24a1f3580ac25e11cfa3c6b8cc))(@deepseek-ai/dsh-timeout@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))
+      '@deepseek-ai/dsh-session-reference':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(535ff208b76500c8770cfd701efd9f97)
+      '@deepseek-ai/dsh-skill':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-llm@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-attachment@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))(@deepseek-ai/dsh-timeout@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))))(@deepseek-ai/dsh-scope@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))
+      '@deepseek-ai/dsh-tools':
+        specifier: ^0.1.1-rc.2
+        version: 0.1.1-rc.2(119bc70f73f8eddebfaa6b47561adeb3)
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.1
+        version: 3.18.1
+
+  packages/adapter-file-bridge:
+    dependencies:
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/adapter-opencode:
+    dependencies:
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:../core
+      '@opencode-ai/sdk':
+        specifier: 1.18.23
+        version: 1.18.23
+
+  packages/adapter-workbuddy:
+    dependencies:
+      '@coaseedge/flowit-adapter-file-bridge':
+        specifier: workspace:*
+        version: link:../adapter-file-bridge
+      '@coaseedge/flowit-core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/core: {}
 
 packages:
 
