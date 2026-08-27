@@ -2,6 +2,7 @@ node_modules/
 dist/
 .dsh/
 .flowit-workflow/
+.tmp-packs/
 *.log
 .DS_Store
 
