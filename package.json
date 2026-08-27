@@ -2,7 +2,7 @@
   "name": "@coaseedge/flowit-workflow",
   "version": "0.4.0",
   "description": "Agent-agnostic orchestration core with durable scheduling, pipeline graphs, Skill binding, context flow, and host adapters.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -21,7 +21,7 @@
     "./dsh": { "types": "./dist/dsh/plugin.d.ts", "default": "./dist/dsh/plugin.js" }
   },
   "bin": { "flowit-workflow": "dist/cli.js" },
-  "files": ["dist", ".claude-plugin", ".mcp.json", "hooks", "skills", "integrations", "README.md", "LICENSE"],
+  "files": ["dist", ".claude-plugin", ".mcp.json", "hooks", "skills", "integrations", "assets", "README.md", "LICENSE", "NOTICE"],
   "engines": { "node": "^22.19.0 || >=24.0.0" },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -1,230 +1,252 @@
-# Flowit Workflow
+<div align="center">
 
-**Flowit Workflow is an agent-agnostic orchestration layer for long-lived Agent sessions.**
+<img src="assets/flowit-hero.svg" alt="Flowit Workflow — durable orchestration for long-lived AI agent sessions" width="100%" />
 
-It provides four host-neutral primitives:
+<br />
 
-- **Durable Schedule Engine** — run work later or on a fixed cadence.
-- **Pipeline / Work Graph** — move work across sessions/hosts in a DAG.
-- **Skill Binding** — resolve named Skills at execution time.
-- **Context Graph** — pass bounded, read-only context references between sessions.
+[![CI](https://github.com/Andrewlislin/Flowit-Workflow/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Andrewlislin/Flowit-Workflow/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-D22128?style=flat-square)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-%5E22.19%20%7C%20%3E%3D24-339933?style=flat-square&logo=nodedotjs&logoColor=white)](package.json)
+[![pnpm](https://img.shields.io/badge/pnpm-11.7-F69220?style=flat-square&logo=pnpm&logoColor=white)](package.json)
+[![Status](https://img.shields.io/badge/status-experimental-F59E0B?style=flat-square)](#host-support)
 
-Host authentication, transcripts, permissions, sandboxes and model configuration remain authoritative in each Agent host.
+**A host-neutral orchestration layer for durable schedules, multi-session work graphs, Skill binding, and bounded context flow.**
 
-## Support matrix
+[Quick start](#quick-start) · [Architecture](#architecture) · [Host support](#host-support) · [Semantics](#durable-execution-semantics) · [Documentation](#documentation)
 
-| Host | Release level | Dispatch | Skill | Context | Events |
-| --- | --- | --- | --- | --- | --- |
-| DeepSeek Harness | Reference | native live/cold Session | native | native snapshot | native |
-| Claude Code | Pilot | public `--resume` path | verified wrapper Skill | bounded summary | durable Hooks journal |
-| OpenCode V2 | **Experimental** | pinned generated Session API | generated Skill catalog | bounded Session context | generated event stream |
-| Codex | **Experimental** | App Server v2 thread/turn API | typed `skill` item | bounded thread summary | App Server notifications |
-| WorkBuddy | Hybrid | bridge or configured enterprise driver | WorkBuddy Skill | bounded summary | Hooks/bridge |
-| 豆包办公 | Bridge | host Worker only; no public Session resume claimed | custom Skill | bounded summary | no public event API claimed |
+</div>
 
-OpenCode and Codex remain **Experimental** until pinned host-contract tests and real hosted E2E execute successfully.
+---
+
+## Why Flowit
+
+AI agents are good at executing a turn. Long-lived systems also need to decide **when work runs, which session owns it, how failures recover, and what context is allowed to cross boundaries**.
+
+<table>
+<tr>
+<td width="50%">
+
+### ⏱ Durable schedules
+
+Run work once or on a cadence with atomic occurrence claims, worker leases, heartbeat renewal, retry, and stale-run recovery.
+
+</td>
+<td width="50%">
+
+### 🔀 Pipeline / Work Graph
+
+Compose session work as a DAG with durable event admission, node checkpoints, sibling isolation, retry, and bounded deduplication.
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### 🧩 Skill binding
+
+Resolve named Skills at execution time and fail closed when the selected host cannot establish the requested binding.
+
+</td>
+<td width="50%">
+
+### 🧠 Context graph
+
+Move bounded, read-only context references between sessions without copying credentials, authority, or complete transcripts.
+
+</td>
+</tr>
+</table>
+
+Flowit does **not** replace host authentication, permission systems, sandboxes, transcripts, or model configuration. Those remain authoritative in each Agent host.
+
+## Quick start
+
+### Requirements
+
+- Node.js `^22.19.0` or `>=24`
+- pnpm `11.7`
+- At least one configured host adapter
+
+```bash
+git clone https://github.com/Andrewlislin/Flowit-Workflow.git
+cd Flowit-Workflow
+
+pnpm install
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+Start a detached worker for one host:
+
+```bash
+FLOWIT_WORKFLOW_ADAPTER=codex \
+flowit-workflow daemon --adapter=codex --instance=default --detach
+```
+
+Run multiple adapters in one orchestration instance:
+
+```bash
+FLOWIT_WORKFLOW_OPENCODE_URL=http://localhost:4096 \
+FLOWIT_WORKFLOW_ADAPTERS=opencode,codex \
+flowit-workflow daemon \
+  --adapter=opencode \
+  --adapters=opencode,codex \
+  --instance=research
+```
+
+Mutation-capable MCP tools are opt-in:
+
+```bash
+export FLOWIT_WORKFLOW_MUTATIONS=1
+```
 
 ## Architecture
 
-```text
-                         Flowit Orchestration Core
-                                  │
-        ┌─────────────────────────┼─────────────────────────┐
-        │                         │                         │
- Durable Schedule            Pipeline / Work Graph     Context Graph
-        │                         │                         │
-        └────────────────── Skill Binding ─────────────────┘
-                                  │
-                         AgentAdapter contract
-                                  │
-  DSH / Claude / OpenCode / Codex / WorkBuddy / 豆包办公 / future hosts
+<img src="assets/flowit-architecture.svg" alt="Flowit Workflow architecture: schedules and host events enter the orchestration core, then execute through host adapters" width="100%" />
+
+The Core stores orchestration facts and references. Host adapters translate those facts into host-native session, Skill, context, event, and lifecycle operations.
+
+```ts
+{
+  adapterId: 'codex',
+  sessionId: 'thread-id',
+  prompt: 'Review the implementation',
+  skills: ['code-review'],
+  contextRefs: [
+    { adapterId: 'codex', sessionId: 'research-thread' }
+  ]
+}
 ```
 
-Workflow definitions store references, not copied Skill bodies or entire transcripts.
+## Host support
+
+| Host | Level | Dispatch | Skills | Context | Events |
+| --- | --- | --- | --- | --- | --- |
+| DeepSeek Harness | **Reference** | Native live/cold Session | Native | Native snapshot | Native |
+| Claude Code | **Pilot** | Public `--resume` path | Verified wrapper Skill | Bounded summary | Durable Hooks journal |
+| OpenCode V2 | **Experimental** | Pinned generated Session API | Generated Skill catalog | Bounded Session context | Reconnecting event stream |
+| Codex | **Experimental** | App Server v2 thread/turn API | Typed `skill` item | Bounded thread summary | App Server notifications |
+| WorkBuddy | **Hybrid** | Bridge or managed driver | WorkBuddy Skill | Bounded summary | Hooks/bridge |
+| 豆包办公 | **Bridge** | Host Worker only | Custom Skill | Bounded summary | No public event API claimed |
+
+> OpenCode and Codex remain Experimental until pinned host-contract tests and real hosted end-to-end validation complete successfully.
 
 ## Durable execution semantics
 
-Flowit uses **at-least-once** execution semantics. It does not claim generic exactly-once side effects.
-
-### Schedule occurrences
-
-A Schedule occurrence is claimed only in a Store transaction that simultaneously verifies:
+Flowit uses **at-least-once execution**. It does not claim generic exactly-once side effects.
 
 ```text
-Schedule exists
-status == active
-nextRunAt == expected occurrence
-trigger is still claimable
+trigger observed
+      ↓
+durable admission / atomic claim
+      ↓
+worker lease + heartbeat
+      ↓
+dispatch / checkpoint / retry
+      ↓
+completed → bounded terminal receipt
+failed    → retry or dead-letter
 ```
 
-A claimed run carries owner/lease/heartbeat state. Failed work may retry; stale running work may be reclaimed; Pipeline node checkpoints survive attempts.
+Core invariants include:
 
-### Event Pipeline admission
+- Schedule claims atomically verify `active` status and the exact `nextRunAt`.
+- Host events are durably admitted before the listener acknowledges them.
+- Pipeline nodes use stable correlation keys across retries.
+- Active and retryable runs survive audit-history pruning.
+- Terminal replay deduplication is bounded by count and retention time.
+- Side effects without host-native idempotency or transactions may still repeat after a crash.
 
-Host event receipt and Pipeline business execution are deliberately separated:
+<details>
+<summary><strong>Default retention and recovery settings</strong></summary>
 
 ```text
-host event arrives
-      ↓
-match active Pipelines
-      ↓
-ONE Store transaction
-persist eventInbox rows for every matching Pipeline
-      ↓
-host listener may return
-      ↓
-worker claims durable admission → running lease
-      ↓
-execute / retry / checkpoint
+leaseDurationMs             = 30 seconds
+maxPipelineAttempts         = 3
+maxScheduleAttempts         = 3
+maxRunHistory               = 500
+maxTerminalReceipts         = 100000
+terminalReceiptRetentionMs  = 90 days
 ```
 
-Therefore an event queued behind a long-running Pipeline is not only an in-memory Promise. If the daemon exits after admission but before execution, the next Core instance sees `eventInbox` and resumes it.
+A receipt for the current active Schedule occurrence is protected until that Schedule advances.
 
-A failing Pipeline is isolated from siblings matching the same event. OpenCode event consumption reconnects with bounded exponential backoff after stream failure, but reconnect is not used as a substitute for Flowit's own durable admission.
+</details>
 
-### Terminal dedupe retention
+## Storage and migration
 
-`runs[]` is bounded audit/recovery history. Terminal Pipeline receipts are stored separately, but are also intentionally bounded instead of growing forever.
-
-Defaults:
-
-```text
-maxTerminalReceipts = 100000
-terminalReceiptRetentionMs = 90 days
-```
-
-The earliest limit reached may evict an old event receipt. Active Schedule-occurrence receipts needed to close the crash-after-complete/before-advance window are protected until the Schedule advances. This means old event replay deduplication is a **bounded retention guarantee**, not permanent exactly-once delivery.
-
-## Adapter lifecycle and daemon readiness
-
-`AgentAdapter` may implement:
-
-```ts
-start?(signal?: AbortSignal): Promise<void> | void
-```
-
-Lifecycle state is tracked per registered Adapter instance, not only by string ID. Unregistering an Adapter aborts that generation; registering another Adapter with the same ID gets a new lifecycle. Control-plane host operations lazily call Adapter startup before `listSessions`/dispatch.
-
-For an active daemon, `core.ready` means:
-
-1. durable storage load/migration succeeded;
-2. enabled Adapter preflights succeeded;
-3. Pipeline event subscriptions were attached;
-4. recoverable work was reconciled;
-5. Scheduler startup completed.
-
-`dispose()` aborts startup before stopping workers and disposing adapters. OpenCode startup passes the abort signal to its service request; Codex startup passes it into App Server initialization and terminates the child on cancellation.
-
-Detached startup uses an atomic readiness file. Partial JSON is treated as not-yet-published state. On readiness failure/timeout the parent sends `SIGTERM`, waits a bounded grace period, then escalates to `SIGKILL` (process-group signalling on POSIX) if the child still exists. A stale storage daemon lease is subsequently recoverable from its dead PID.
-
-MCP `daemon_start` delegates to this same CLI `--detach` lifecycle.
-
-## v0.3 → v0.4 storage migration
-
-v0.4 default state is:
+Current default storage:
 
 ```text
 ~/.flowit-workflow/instances/<instanceId>/workflow.json
 ```
 
-v0.3 stored state by default Adapter:
+For the default instance, Flowit detects legacy v0.3 stores at:
 
 ```text
 ~/.flowit-workflow/<adapterId>/workflow.json
 ```
 
-For `instanceId=default` without an explicitly configured storage path, Flowit scans **all built-in legacy Adapter paths**, not only the current default Adapter.
-
-Migration rules:
-
-```text
-no non-empty legacy DBs             → normal new storage
-one non-empty legacy DB              → migrate + archive legacy
-multiple semantically equal DBs      → migrate once + archive all
-multiple different non-empty DBs     → fail closed
-new non-empty DB differs from legacy → fail closed
-```
-
-State equivalence uses structured deep equality, not JSON property order.
-
-Migration acquires the legacy v0.3 `daemon.pid` paths with the same `open(..., 'wx')` ownership primitive used by v0.3 before touching legacy database files. A live old daemon therefore blocks migration, while the migration guard prevents an old daemon from starting in the check/use gap.
-
-For explicit/offline migration:
+Use the offline migration command when explicit control is required:
 
 ```bash
-flowit-workflow migrate --instance=default
 flowit-workflow migrate --instance=default \
   --legacy-storage=/path/a/workflow.json \
   --legacy-storage=/path/b/workflow.json
 ```
 
-`FLOWIT_WORKFLOW_LEGACY_STORAGE_FILES` can also provide explicit legacy paths. Explicit `FLOWIT_WORKFLOW_STORAGE_FILE` does not trigger automatic legacy discovery.
+Conflicting non-empty databases fail closed rather than being silently merged.
 
-## Generic control plane
+## Adapter notes
 
-```bash
-FLOWIT_WORKFLOW_INSTANCE_ID=research \
-FLOWIT_WORKFLOW_ADAPTER=codex \
-flowit-workflow daemon --adapter=codex --instance=research --detach
+<details>
+<summary><strong>OpenCode V2</strong></summary>
 
-FLOWIT_WORKFLOW_ADAPTERS=opencode,codex \
-flowit-workflow daemon --adapter=opencode --adapters=opencode,codex
-```
-
-Mutation-capable MCP tools remain opt-in with `FLOWIT_WORKFLOW_MUTATIONS=1`.
-
-## OpenCode V2 — Experimental
-
-Flowit follows the pinned generated plural client contract:
+Set `FLOWIT_WORKFLOW_OPENCODE_URL`. Flowit uses the pinned plural generated client surface:
 
 ```text
-OpenCode.make(...)
 client.sessions.*
 client.skills.*
 client.events.*
 ```
 
-There is no `/service` runtime import. `FLOWIT_WORKFLOW_OPENCODE_URL` is required. The Adapter preserves host event `id`, then durable aggregate/sequence identity, then a deterministic canonical-content hash. Deprecated `session.idle` and current `session.status` idle both normalize to `turn_completed`.
+The adapter preserves stable host event identity, maps both `session.idle` and `session.status: idle`, preflights startup, and reconnects the event stream with bounded backoff.
 
-`start(signal)` preflights the service with that signal. Unexpected SSE termination reconnects with bounded exponential backoff.
+</details>
 
-## Codex — Experimental
+<details>
+<summary><strong>Codex App Server</strong></summary>
 
-Flowit uses:
+Flowit starts:
 
 ```text
 codex app-server --listen stdio://
 ```
 
-The client handles responses, notifications and server-initiated requests; JSON-RPC IDs are `string | number`; unattended approval defaults fail closed; only `completed` is success. Request/turn deadlines, `turn/interrupt`, process-exit rejection and forced shutdown remain enabled. App Server initialization is part of `start(signal)` and therefore part of active daemon readiness.
+The client handles responses, notifications, server-initiated requests, string/number JSON-RPC IDs, terminal turn validation, timeouts, interruption, and fail-closed unattended approval.
 
-## Bridge protocol v2
+</details>
 
-Bridge transport ownership (`requestId`) and side-effect ownership (`idempotencyKey`) are separate. Renew/release/expired takeover of an execution lease are serialized by a short per-key mutation mutex, and an expired old owner cannot renew itself.
+<details>
+<summary><strong>Bridge hosts</strong></summary>
 
-Shared receipts are now versioned **completed-only** records:
+WorkBuddy and 豆包办公 use Bridge protocol v2. Transport ownership (`requestId`) is separate from logical side-effect ownership (`idempotencyKey`). Shared receipts are versioned, completed-only, and atomically published.
 
-```json
-{
-  "version": 1,
-  "idempotencyKey": "...",
-  "status": "completed",
-  "completedAt": "...",
-  "result": {}
-}
-```
+See [`integrations/bridge/PROTOCOL.md`](integrations/bridge/PROTOCOL.md).
 
-A successful receipt is fully written to a temporary file, flushed, then atomically published to the final path with no-replace semantics. Malformed/wrong-key receipts are quarantined and do not poison future attempts. Retryable failures are written only to the current request outbox; they never become a shared terminal receipt.
+</details>
 
-Successful receipt replay also restores the Session summary catalog before returning, so a crash after receipt publication but before `sessions.json` update does not break downstream Context references.
+## Documentation
 
-See `integrations/bridge/PROTOCOL.md`.
+- [Architecture and execution model](docs/architecture.md)
+- [AgentAdapter contract](docs/adapter-contract.md)
+- [Host adapter capabilities](docs/host-adapters.md)
+- [Claude Code pilot](docs/claude-code-pilot.md)
+- [Bridge protocol v2](integrations/bridge/PROTOCOL.md)
 
-## DeepSeek Harness / Claude Code
-
-The DSH reference remains available from `@coaseedge/flowit-workflow/dsh`. The repository also remains a Claude Code plugin root with Hooks, MCP and bound-run Skills.
-
-## Development and release evidence
+## Development
 
 ```bash
 pnpm install
@@ -234,12 +256,21 @@ pnpm test:host-contracts
 pnpm build
 ```
 
-Unit/recovery tests live in `tests/*.test.ts`; host contract tests live separately in `tests/contracts/*.test.ts`.
+| Command | Purpose |
+| --- | --- |
+| `pnpm typecheck` | Strict TypeScript validation |
+| `pnpm test` | Unit, recovery, lease, migration, and concurrency tests |
+| `pnpm test:host-contracts` | Pinned host protocol contracts |
+| `pnpm build` | Emit the distributable package |
 
-The repository still does **not** contain `pnpm-lock.yaml`. CI therefore has two distinct signals: a non-frozen code-validation job and a `release-lockfile` gate that requires a real lockfile plus `pnpm install --frozen-lockfile`. A reviewed lockfile is still a merge/release requirement.
+The repository currently treats a reviewed `pnpm-lock.yaml` and a fully executed CI validation chain as release gates.
 
-GitHub-hosted Actions for this repository have also failed before runner allocation (`runner_id=0`, `steps=[]`) in prior heads. Such runs are neither passing evidence nor code-failure evidence. Do not treat this PR as release-ready until a working runner executes the validation chain and the lockfile gate is green.
+## Contributing
+
+Issues and pull requests are welcome. Keep adapter capability claims conservative, preserve host permission boundaries, and include deterministic recovery or contract tests for concurrency-sensitive changes.
 
 ## License
 
-MIT
+Licensed under the [Apache License, Version 2.0](LICENSE). Attribution notices are recorded in [`NOTICE`](NOTICE).
+
+Copyright © 2026 CoaseEdge.
