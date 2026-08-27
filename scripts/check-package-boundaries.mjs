@@ -58,4 +58,14 @@ for (const filename of await walk('packages/core/src')) {
   }
 }
 
+const compatibilityWrappers = [
+  ...['adapter','context-graph','dispatcher','domain','lease','pipeline','runtime','scheduler','skill-binding','store','types','utils'].map(name => `src/core/${name}.ts`),
+  ...['execution-lease','hook','receipt','state'].map(name => `src/bridge/${name}.ts`),
+  ...['claude-code','opencode','codex','dsh','file-bridge','workbuddy','doubao-office'].map(name => `src/adapters/${name}.ts`),
+]
+for (const filename of compatibilityWrappers) {
+  const source = (await readFile(filename, 'utf8')).trim()
+  if (!source.startsWith('export * from')) throw new Error(`compatibility wrapper ${filename} must delegate to its workspace package`)
+}
+
 console.log(`Package boundary policy passed for ${manifests.size} workspace packages.`)

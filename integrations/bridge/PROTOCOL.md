@@ -99,7 +99,7 @@ Publication rules:
 2. Flush the temporary file (`fsync`/equivalent) before exposing a stable name.
 3. While still holding the logical execution lease, publish the already-complete inode to `receiptPath` with a **no-replace atomic operation** (`link`, rename-no-replace, or an equivalent host primitive). Do not create the final file and then stream JSON into it.
 4. If a valid completed receipt already exists, replay it instead of overwriting it.
-5. If `receiptPath` contains malformed JSON, the wrong idempotency key, or a non-completed/unknown schema, move it to `receipts/quarantine/` and treat the logical task as not yet completed.
+5. If `receiptPath` contains malformed JSON, the wrong idempotency key, or a non-completed/unknown schema, fail closed. Flowit readers do not automatically move a malformed stable receipt because renaming by path can race a concurrent publisher. Quarantine/removal requires an explicit Worker/operator recovery step after verifying no active publisher owns that logical key.
 6. Remove the temporary file after successful publication/replay.
 
 A per-request failure is written only to `outbox/<requestId>.json` as `error`. The Workflow layer may then retry with a new `requestId` but the same `idempotencyKey`.

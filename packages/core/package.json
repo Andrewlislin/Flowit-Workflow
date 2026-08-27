@@ -22,6 +22,10 @@
     "./bridge/*": {
       "types": "./dist/bridge/*.d.ts",
       "default": "./dist/bridge/*.js"
+    },
+    "./internal/file-lock": {
+      "types": "./dist/internal/file-lock.d.ts",
+      "default": "./dist/internal/file-lock.js"
     }
   },
   "files": [
