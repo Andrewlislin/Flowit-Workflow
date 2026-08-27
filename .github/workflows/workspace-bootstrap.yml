@@ -26,12 +26,15 @@ jobs:
         run: |
           pnpm install --lockfile-only --ignore-scripts
           pnpm install --frozen-lockfile --ignore-scripts
+      - name: Normalize migrated source
+        run: pnpm exec biome check --write packages/adapter-dsh/src/dsh/tools.ts
       - name: Validate migrated workspace
         run: |
           pnpm run check:supply-chain
           pnpm run check:package-boundaries
           pnpm run check:style
           pnpm run build
+          pnpm run check:pack
           pnpm run typecheck:root
           pnpm run test:raw
           pnpm run test:host-contracts:raw
