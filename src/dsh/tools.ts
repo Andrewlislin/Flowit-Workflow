@@ -1,23 +1,358 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { FlowitOrchestrationCore } from '../core/runtime.js'
 import { DSH_ADAPTER_ID } from '../adapters/dsh.js'
+import type { FlowitOrchestrationCore } from '../core/runtime.js'
 
-export interface ToolRegistrationOptions { allowModelMutations: boolean }
-export function registerDshWorkflowTools(ctx: Context, core: FlowitOrchestrationCore, options: ToolRegistrationOptions): void { registerReadTools(ctx, core); if (!options.allowModelMutations) return; registerDispatchTool(ctx, core); registerScheduleMutationTools(ctx, core); registerPipelineMutationTools(ctx, core) }
+export interface ToolRegistrationOptions {
+  allowModelMutations: boolean
+}
+
+export function registerDshWorkflowTools(
+  ctx: Context,
+  core: FlowitOrchestrationCore,
+  options: ToolRegistrationOptions,
+): void {
+  registerReadTools(ctx, core)
+  if (!options.allowModelMutations) return
+
+  registerDispatchTool(ctx, core)
+  registerScheduleMutationTools(ctx, core)
+  registerPipelineMutationTools(ctx, core)
+}
+
 function registerReadTools(ctx: Context, core: FlowitOrchestrationCore): void {
-  ctx.tools.register(defineTool({ name: 'flowit_schedule_list', description: 'List durable Flowit Orchestration scheduled tasks.', parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, async execute() { return JSON.stringify(await core.scheduler.list()) } }))
-  ctx.tools.register(defineTool({ name: 'flowit_pipeline_list', description: 'List Flowit Orchestration cross-session pipelines.', parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, async execute() { return JSON.stringify(await core.pipelines.list()) } }))
-  ctx.tools.register(defineTool({ name: 'flowit_context_candidates', description: 'List DSH sessions that can be referenced as read-only context in the current session.', parameters: { query: { type: 'string', description: 'Optional title, session id, or cwd substring.' }, limit: { type: 'integer', description: 'Maximum candidate count.' } }, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, async execute(args, exec) { if (!exec.agent) throw new Error('flowit_context_candidates requires an owning agent session'); const candidates = await ctx.sessionReferenceResolver.listCandidates(exec.agent, args.query ?? '', args.limit ?? 10, exec.signal); return JSON.stringify(candidates) } }))
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_schedule_list',
+      description: 'List durable Flowit Orchestration scheduled tasks.',
+      parameters: {},
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      async execute() {
+        return JSON.stringify(await core.scheduler.list())
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_pipeline_list',
+      description: 'List Flowit Orchestration cross-session pipelines.',
+      parameters: {},
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      async execute() {
+        return JSON.stringify(await core.pipelines.list())
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_context_candidates',
+      description:
+        'List DSH sessions that can be referenced as read-only context in the current session.',
+      parameters: {
+        query: {
+          type: 'string',
+          description: 'Optional title, session id, or cwd substring.',
+        },
+        limit: { type: 'integer', description: 'Maximum candidate count.' },
+      },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      async execute(args, exec) {
+        if (!exec.agent) {
+          throw new Error('flowit_context_candidates requires an owning agent session')
+        }
+
+        const candidates = await ctx.sessionReferenceResolver.listCandidates(
+          exec.agent,
+          args.query ?? '',
+          args.limit ?? 10,
+          exec.signal,
+        )
+        return JSON.stringify(candidates)
+      },
+    }),
+  )
 }
-function registerDispatchTool(ctx: Context, core: FlowitOrchestrationCore): void { ctx.tools.register(defineTool({ name: 'flowit_dispatch_session', description: 'Dispatch work to another DSH session with optional Skill and read-only session context bindings.', parameters: { session_id: { type: 'string', required: true }, prompt: { type: 'string', required: true }, skills: { type: 'array', items: { type: 'string' } }, context_sessions: { type: 'array', items: { type: 'string' } } }, output: { schema: { type: 'object', additionalProperties: false, properties: { adapterId: { type: 'string', required: true }, sessionId: { type: 'string', required: true }, loadedSkills: { type: 'array', required: true, items: { type: 'string' } }, referencedSessions: { type: 'array', required: true, items: { type: 'string' } } } }, render: (_args, value) => [{ type: 'text', text: `Dispatched to ${value.adapterId}:${value.sessionId}.` }] }, execute(args, exec) { return core.dispatcher.dispatch({ adapterId: DSH_ADAPTER_ID, sessionId: args.session_id, prompt: args.prompt, skills: args.skills ?? [], contextRefs: (args.context_sessions ?? []).map(sessionId => ({ adapterId: DSH_ADAPTER_ID, sessionId })) }, [], exec.signal) } })) }
+
+function registerDispatchTool(ctx: Context, core: FlowitOrchestrationCore): void {
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_dispatch_session',
+      description:
+        'Dispatch work to another DSH session with optional Skill and read-only session context bindings.',
+      parameters: {
+        session_id: { type: 'string', required: true },
+        prompt: { type: 'string', required: true },
+        skills: { type: 'array', items: { type: 'string' } },
+        context_sessions: { type: 'array', items: { type: 'string' } },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            adapterId: { type: 'string', required: true },
+            sessionId: { type: 'string', required: true },
+            loadedSkills: {
+              type: 'array',
+              required: true,
+              items: { type: 'string' },
+            },
+            referencedSessions: {
+              type: 'array',
+              required: true,
+              items: { type: 'string' },
+            },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `Dispatched to ${value.adapterId}:${value.sessionId}.` },
+        ],
+      },
+      execute(args, exec) {
+        return core.dispatcher.dispatch(
+          {
+            adapterId: DSH_ADAPTER_ID,
+            sessionId: args.session_id,
+            prompt: args.prompt,
+            skills: args.skills ?? [],
+            contextRefs: (args.context_sessions ?? []).map(sessionId => ({
+              adapterId: DSH_ADAPTER_ID,
+              sessionId,
+            })),
+          },
+          [],
+          exec.signal,
+        )
+      },
+    }),
+  )
+}
+
 function registerScheduleMutationTools(ctx: Context, core: FlowitOrchestrationCore): void {
-  ctx.tools.register(defineTool({ name: 'flowit_schedule_create', description: 'Create a durable DSH scheduled agent task. A cold target session is resumed when the task fires.', parameters: { name: { type: 'string', required: true }, session_id: { type: 'string', required: true }, prompt: { type: 'string', required: true }, timing_kind: { type: 'string', required: true, enum: ['at','every'] }, at: { type: 'string' }, every_seconds: { type: 'integer' }, skills: { type: 'array', items: { type: 'string' } }, context_sessions: { type: 'array', items: { type: 'string' } } }, output: { schema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', required: true }, status: { type: 'string', required: true }, nextRunAt: { type: 'string', required: true } } }, render: (_args, value) => [{ type: 'text', text: `Created schedule ${value.id}; next run ${value.nextRunAt}.` }] }, async execute(args) { const timing = args.timing_kind === 'at' ? { kind: 'at' as const, at: required(args.at, 'at') } : { kind: 'every' as const, everySeconds: requiredInteger(args.every_seconds, 'every_seconds') }; const task = await core.scheduler.create({ name: args.name, timing, target: { adapterId: DSH_ADAPTER_ID, sessionId: args.session_id, prompt: args.prompt, skills: args.skills ?? [], contextRefs: (args.context_sessions ?? []).map(sessionId => ({ adapterId: DSH_ADAPTER_ID, sessionId })) } }); if (!task.nextRunAt) throw new Error('created schedule has no nextRunAt'); return { id: task.id, status: task.status, nextRunAt: task.nextRunAt } } }))
-  ctx.tools.register(defineTool({ name: 'flowit_schedule_cancel', description: 'Cancel a Flowit Orchestration scheduled task.', parameters: { id: { type: 'string', required: true } }, output: { schema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', required: true }, status: { type: 'string', required: true } } }, render: (_args, value) => [{ type: 'text', text: `Schedule ${value.id} is ${value.status}.` }] }, async execute(args) { const task = await core.scheduler.cancel(args.id); return { id: task.id, status: task.status } } }))
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_schedule_create',
+      description:
+        'Create a durable DSH scheduled agent task. A cold target session is resumed when the task fires.',
+      parameters: {
+        name: { type: 'string', required: true },
+        session_id: { type: 'string', required: true },
+        prompt: { type: 'string', required: true },
+        timing_kind: { type: 'string', required: true, enum: ['at', 'every'] },
+        at: { type: 'string' },
+        every_seconds: { type: 'integer' },
+        skills: { type: 'array', items: { type: 'string' } },
+        context_sessions: { type: 'array', items: { type: 'string' } },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+            nextRunAt: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `Created schedule ${value.id}; next run ${value.nextRunAt}.` },
+        ],
+      },
+      async execute(args) {
+        const timing =
+          args.timing_kind === 'at'
+            ? { kind: 'at' as const, at: required(args.at, 'at') }
+            : {
+                kind: 'every' as const,
+                everySeconds: requiredInteger(args.every_seconds, 'every_seconds'),
+              }
+
+        const task = await core.scheduler.create({
+          name: args.name,
+          timing,
+          target: {
+            adapterId: DSH_ADAPTER_ID,
+            sessionId: args.session_id,
+            prompt: args.prompt,
+            skills: args.skills ?? [],
+            contextRefs: (args.context_sessions ?? []).map(sessionId => ({
+              adapterId: DSH_ADAPTER_ID,
+              sessionId,
+            })),
+          },
+        })
+
+        if (!task.nextRunAt) throw new Error('created schedule has no nextRunAt')
+
+        return {
+          id: task.id,
+          status: task.status,
+          nextRunAt: task.nextRunAt,
+        }
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_schedule_cancel',
+      description: 'Cancel a Flowit Orchestration scheduled task.',
+      parameters: { id: { type: 'string', required: true } },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true },
+            status: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `Schedule ${value.id} is ${value.status}.` },
+        ],
+      },
+      async execute(args) {
+        const task = await core.scheduler.cancel(args.id)
+        return { id: task.id, status: task.status }
+      },
+    }),
+  )
 }
+
 function registerPipelineMutationTools(ctx: Context, core: FlowitOrchestrationCore): void {
-  ctx.tools.register(defineTool({ name: 'flowit_pipeline_create_linear', description: 'Create a linear DSH cross-session pipeline; each downstream node inherits read-only context from its predecessor.', parameters: { name: { type: 'string', required: true }, trigger_session_id: { type: 'string' }, steps: { type: 'array', required: true, items: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', required: true }, session_id: { type: 'string', required: true }, prompt: { type: 'string', required: true }, skills: { type: 'array', items: { type: 'string' } }, context_sessions: { type: 'array', items: { type: 'string' } } } } } }, output: { schema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', required: true }, name: { type: 'string', required: true } } }, render: (_args, value) => [{ type: 'text', text: `Created pipeline ${value.name} (${value.id}).` }] }, async execute(args) { const steps = args.steps as Array<{ id: string; session_id: string; prompt: string; skills?: string[]; context_sessions?: string[] }>; if (steps.length === 0) throw new Error('steps must not be empty'); const nodes = steps.map(step => ({ id: step.id, inheritUpstreamContext: true, target: { adapterId: DSH_ADAPTER_ID, sessionId: step.session_id, prompt: step.prompt, skills: step.skills ?? [], contextRefs: (step.context_sessions ?? []).map(sessionId => ({ adapterId: DSH_ADAPTER_ID, sessionId })) } })); const edges = nodes.slice(1).map((node, index) => ({ from: nodes[index]!.id, to: node.id })); const pipeline = await core.pipelines.create({ name: args.name, trigger: args.trigger_session_id ? { kind: 'agent_event', adapterId: DSH_ADAPTER_ID, sessionId: args.trigger_session_id, event: 'turn_completed' } : { kind: 'manual' }, nodes, edges }); return { id: pipeline.id, name: pipeline.name } } }))
-  ctx.tools.register(defineTool({ name: 'flowit_pipeline_run', description: 'Run an active Flowit Orchestration pipeline now.', parameters: { id: { type: 'string', required: true } }, output: { schema: { type: 'object', additionalProperties: false, properties: { id: { type: 'string', required: true }, accepted: { type: 'boolean', required: true } } }, render: (_args, value) => [{ type: 'text', text: value.accepted ? `Pipeline ${value.id} completed.` : `Pipeline ${value.id} was not accepted.` }] }, async execute(args) { await core.pipelines.run(args.id); return { id: args.id, accepted: true } } }))
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_pipeline_create_linear',
+      description:
+        'Create a linear DSH cross-session pipeline; each downstream node inherits read-only context from its predecessor.',
+      parameters: {
+        name: { type: 'string', required: true },
+        trigger_session_id: { type: 'string' },
+        steps: {
+          type: 'array',
+          required: true,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', required: true },
+              session_id: { type: 'string', required: true },
+              prompt: { type: 'string', required: true },
+              skills: { type: 'array', items: { type: 'string' } },
+              context_sessions: { type: 'array', items: { type: 'string' } },
+            },
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true },
+            name: { type: 'string', required: true },
+          },
+        },
+        render: (_args, value) => [
+          { type: 'text', text: `Created pipeline ${value.name} (${value.id}).` },
+        ],
+      },
+      async execute(args) {
+        const steps = args.steps as Array<{
+          id: string
+          session_id: string
+          prompt: string
+          skills?: string[]
+          context_sessions?: string[]
+        }>
+        if (steps.length === 0) throw new Error('steps must not be empty')
+
+        const nodes = steps.map(step => ({
+          id: step.id,
+          inheritUpstreamContext: true,
+          target: {
+            adapterId: DSH_ADAPTER_ID,
+            sessionId: step.session_id,
+            prompt: step.prompt,
+            skills: step.skills ?? [],
+            contextRefs: (step.context_sessions ?? []).map(sessionId => ({
+              adapterId: DSH_ADAPTER_ID,
+              sessionId,
+            })),
+          },
+        }))
+        const edges = nodes.slice(1).map((node, index) => ({
+          from: nodes[index]!.id,
+          to: node.id,
+        }))
+
+        const pipeline = await core.pipelines.create({
+          name: args.name,
+          trigger: args.trigger_session_id
+            ? {
+                kind: 'agent_event',
+                adapterId: DSH_ADAPTER_ID,
+                sessionId: args.trigger_session_id,
+                event: 'turn_completed',
+              }
+            : { kind: 'manual' },
+          nodes,
+          edges,
+        })
+
+        return { id: pipeline.id, name: pipeline.name }
+      },
+    }),
+  )
+
+  ctx.tools.register(
+    defineTool({
+      name: 'flowit_pipeline_run',
+      description: 'Run an active Flowit Orchestration pipeline now.',
+      parameters: { id: { type: 'string', required: true } },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true },
+            accepted: { type: 'boolean', required: true },
+          },
+        },
+        render: (_args, value) => [
+          {
+            type: 'text',
+            text: value.accepted
+              ? `Pipeline ${value.id} completed.`
+              : `Pipeline ${value.id} was not accepted.`,
+          },
+        ],
+      },
+      async execute(args) {
+        await core.pipelines.run(args.id)
+        return { id: args.id, accepted: true }
+      },
+    }),
+  )
 }
-function required(value: string | undefined, name: string): string { if (!value?.trim()) throw new Error(`${name} is required`); return value }
-function requiredInteger(value: number | undefined, name: string): number { if (!Number.isSafeInteger(value)) throw new Error(`${name} must be an integer`); return value as number }
+
+function required(value: string | undefined, name: string): string {
+  if (!value?.trim()) throw new Error(`${name} is required`)
+  return value
+}
+
+function requiredInteger(value: number | undefined, name: string): number {
+  if (!Number.isSafeInteger(value)) throw new Error(`${name} must be an integer`)
+  return value as number
+}
