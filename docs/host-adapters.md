@@ -6,7 +6,7 @@ Flowit Workflow keeps host-specific execution below the `AgentAdapter` boundary.
 | --- | --- | --- |
 | DeepSeek Harness | Reference | Native Session resume, Skills, immutable references and events. |
 | Claude Code | Pilot | Public `--resume`, Hooks journal/cursor and wrapper Skill attestation. |
-| OpenCode V2 | Experimental | Pinned generated plural client, abortable preflight, stable event IDs and reconnecting stream. |
+| OpenCode V2 | Experimental | Official `@opencode-ai/sdk` V2 client, abortable preflight, stable event IDs and reconnecting stream. |
 | Codex | Experimental | Bidirectional App Server v2, typed Skills, abortable startup, terminal checks and string/number JSON-RPC IDs. |
 | WorkBuddy | Hybrid | Desktop Bridge or configured enterprise/Managed-Agent driver. |
 | 豆包办公 | Bridge | Host Worker Skill/file bridge; no unverified Session resume/event API claims. |
@@ -36,9 +36,19 @@ Adapter replay properties still matter for events not yet observed by Flowit. Op
 
 ### OpenCode
 
-The built-in runtime requires `FLOWIT_WORKFLOW_OPENCODE_URL`. Flowit uses the pinned generated plural `sessions`, `skills`, and `events` surface and no undocumented `/service` lifecycle.
+The built-in runtime requires `FLOWIT_WORKFLOW_OPENCODE_URL`. Flowit pins the public npm package `@opencode-ai/sdk@1.18.23`, which is the SDK version declared by the OpenCode source revision used for the V2 contract review. The repository no longer consumes OpenCode's internal `vendor/*.tgz` client artifact.
 
-`start(signal)` preflights `sessions.active` with cancellation. Unexpected event-stream end/failure reconnects with bounded exponential backoff. Event normalization preserves `event.id`, then durable aggregate+sequence, then a deterministic canonical-content hash; wall-clock time is never trigger identity.
+Runtime integration uses the public V2 SDK surface:
+
+```text
+client.v2.session.*
+client.v2.skill.*
+client.v2.event.*
+```
+
+The SDK remains an optional peer dependency and is dynamically imported only when the OpenCode adapter is used. `start(signal)` preflights `v2.session.active` with cancellation. Unexpected event-stream end/failure reconnects with bounded exponential backoff. Event normalization preserves `event.id`, then durable aggregate+sequence, then a deterministic canonical-content hash; wall-clock time is never trigger identity.
+
+CI runs `scripts/check-dependency-sources.mjs` before dependency installation and rejects direct URL, Git, local-file and tarball dependency specifiers in release manifests.
 
 ### Codex
 
