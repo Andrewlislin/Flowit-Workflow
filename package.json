@@ -26,10 +26,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "format": "biome format --write src/dsh/tools.ts",
+    "format:check": "biome format src/dsh/tools.ts",
+    "lint": "biome lint src/dsh/tools.ts",
+    "check:style": "biome ci --reporter=github src/dsh/tools.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:host-contracts": "node --import tsx --test tests/contracts/*.test.ts",
     "check:supply-chain": "node scripts/check-dependency-sources.mjs",
-    "check": "npm run check:supply-chain && npm run typecheck && npm run test && npm run test:host-contracts",
+    "check": "npm run check:supply-chain && npm run check:style && npm run typecheck && npm run test && npm run test:host-contracts",
     "prepare": "npm run build"
   },
   "peerDependencies": {
@@ -57,6 +61,7 @@
     "@opencode-ai/sdk": { "optional": true }
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.10",
     "@types/node": "^22.20.0",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
