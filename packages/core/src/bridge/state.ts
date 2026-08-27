@@ -113,6 +113,16 @@ export async function writeBridgeCursor(paths: BridgeStatePaths, value: number):
   if (!Number.isSafeInteger(value) || value < 0)
     throw new Error('bridge event cursor must be a non-negative integer')
   await durableReplaceText(paths.cursorFile, `${value}\n`)
+  if (paths.cursorFile !== paths.legacyCursorFile) {
+    await advanceSharedCursor(paths.legacyCursorFile, value)
+  }
+}
+
+async function advanceSharedCursor(file: string, value: number): Promise<void> {
+  await withGenerationFileLock(file, async () => {
+    const current = (await readCursor(file)) ?? 0
+    if (value > current) await durableReplaceText(file, `${value}\n`)
+  })
 }
 
 async function readCursor(file: string): Promise<number | undefined> {
