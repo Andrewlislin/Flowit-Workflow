@@ -15,7 +15,7 @@ export class CodexAgentAdapter implements AgentAdapter {
   readonly id = CODEX_ADAPTER_ID
   readonly capabilities = { coldResume: true, liveDispatch: false, skillBinding: true, contextReference: 'summary' as const, eventSubscription: true }
   private readonly config: Required<Pick<CodexAdapterConfig, 'requestTimeoutMs' | 'turnTimeoutMs'>> & CodexAdapterConfig
-  private client?: CodexAppServerClient
+  private client: CodexAppServerClient | undefined
 
   constructor(config: CodexAdapterConfig = {}) { this.config = { ...config, requestTimeoutMs: config.requestTimeoutMs ?? 30_000, turnTimeoutMs: config.turnTimeoutMs ?? 30 * 60_000 } }
   async start(signal?: AbortSignal): Promise<void> { await this.getClient(signal) }
@@ -59,14 +59,14 @@ export class CodexAgentAdapter implements AgentAdapter {
 }
 
 export class CodexAppServerClient {
-  private process?: ChildProcessWithoutNullStreams
+  private process: ChildProcessWithoutNullStreams | undefined
   private nextId = 1
   private readonly pending = new Map<JsonRpcId, Pending>()
   private readonly listeners = new Set<(method:string, params:any) => void | Promise<void>>()
   private readonly waiters = new Set<Waiter>()
   private readonly notificationBuffer: Array<{method:string;params:any}> = []
-  private started?: Promise<void>
-  private closedError?: Error
+  private started: Promise<void> | undefined
+  private closedError: Error | undefined
 
   constructor(private readonly executable: string, private readonly defaultTimeoutMs = 30_000, private readonly serverRequestHandler?: CodexServerRequestHandler) {}
 

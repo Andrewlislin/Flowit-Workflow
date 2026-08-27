@@ -6,7 +6,7 @@ export const WORKBUDDY_ADAPTER_ID = 'workbuddy'
 export interface WorkBuddyAdapterConfig extends Omit<FileBridgeAdapterConfig, 'adapterId'> { dispatchCommand?: string[]; mode?: 'desktop-bridge' | 'managed-agent-driver' }
 
 export class WorkBuddyAgentAdapter extends FileBridgeAgentAdapter {
-  private readonly dispatchCommand?: string[]; readonly mode: 'desktop-bridge' | 'managed-agent-driver'
+  private readonly dispatchCommand: string[] | undefined; readonly mode: 'desktop-bridge' | 'managed-agent-driver'
   constructor(config: WorkBuddyAdapterConfig = {}) { super({ adapterId: WORKBUDDY_ADAPTER_ID, ...config, capabilities: { coldResume: Boolean(config.dispatchCommand), liveDispatch: false, skillBinding: true, contextReference: 'summary', eventSubscription: true, ...config.capabilities } }); this.dispatchCommand = config.dispatchCommand; this.mode = config.mode ?? (config.dispatchCommand ? 'managed-agent-driver' : 'desktop-bridge') }
   override async dispatch(request: AgentDispatchRequest, signal?: AbortSignal): Promise<AgentDispatchResult> { if (!this.dispatchCommand?.length) return super.dispatch(request, signal); const result = await runJsonCommand(this.dispatchCommand, { version: 1, adapterId: this.id, request }, signal); const missing = request.skills.filter(skill => !result.loadedSkills.includes(skill)); if (missing.length) throw new Error(`WorkBuddy driver did not attest requested Skill bindings: ${missing.join(', ')}`); await this.recordResult(request, result); return result }
 }

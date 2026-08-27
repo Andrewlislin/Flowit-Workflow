@@ -313,7 +313,7 @@ function normalizeState(parsed: WorkflowState): WorkflowState {
   if (parsed.version !== 1 || !Array.isArray(parsed.schedules) || !Array.isArray(parsed.pipelines) || !Array.isArray(parsed.runs)) throw new Error('unsupported Flowit Workflow state')
   parsed.eventInbox = Array.isArray(parsed.eventInbox) ? parsed.eventInbox : []
   parsed.terminalReceipts = Array.isArray(parsed.terminalReceipts) ? parsed.terminalReceipts : []
-  parsed.runs = parsed.runs.map(run => ({ attempt: run.attempt ?? 1, updatedAt: run.updatedAt ?? run.completedAt ?? run.startedAt, ...run }))
+  parsed.runs = parsed.runs.map(run => ({ ...run, attempt: run.attempt ?? 1, updatedAt: run.updatedAt ?? run.completedAt ?? run.startedAt }))
   return parsed
 }
 function isEmptyState(state: WorkflowState): boolean { return state.schedules.length === 0 && state.pipelines.length === 0 && state.eventInbox.length === 0 && state.runs.length === 0 && state.terminalReceipts.length === 0 }
