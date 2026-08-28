@@ -39,6 +39,7 @@ export interface PreparedPresetInstall {
   readonly preset: PresetDescriptor
   readonly pipelineName: string
   readonly storageFile: string
+  readonly legacyStorageFiles: readonly string[]
   readonly instanceId: string
   readonly workspace: string
   readonly defaultAdapterId?: string
