@@ -7,7 +7,7 @@ import {
   type PresetInstallRuntime,
 } from './install.js'
 import { createDefaultPresetRegistry, type PresetRegistry } from './registry.js'
-import type { AppliedPresetInstall, PreparedPresetInstall, PresetDescriptor } from './types.js'
+import type { AppliedPresetInstall, PreparedPresetInstall, PresetDescriptor, PresetScheduleMode } from './types.js'
 
 export type PresetCliCommand = 'list' | 'show' | 'install'
 
@@ -60,7 +60,8 @@ export async function runPresetCli(
       `preset ${plan.preset.id} is incomplete: bind roles ${plan.missingRoles.join(', ') || '(none)'} and provide required input before install`,
     )
   }
-  if (plan.action === 'create' && !parsed.assumeYes) {
+  const needsConfirmation = plan.action === 'create' || plan.schedule.action === 'create'
+  if (needsConfirmation && !parsed.assumeYes) {
     const approved = await confirmInstall(plan, runtime.stdin ?? process.stdin, stdout)
     if (!approved) {
       writeOutput(stdout, { kind: 'preset-install-cancelled', presetId: plan.preset.id }, parsed.json)
@@ -84,6 +85,11 @@ export function parsePresetCliArgs(args: readonly string[], cwd = process.cwd())
   let projectDir = cwd
   let instanceId: string | undefined
   let storageFile: string | undefined
+  let scheduleMode: PresetScheduleMode | undefined
+  let scheduleName: string | undefined
+  let scheduleTime: string | undefined
+  let timeZone: string | undefined
+  let everySeconds: number | undefined
   let dryRun = false
   let assumeYes = false
   let json = false
@@ -107,6 +113,25 @@ export function parsePresetCliArgs(args: readonly string[], cwd = process.cwd())
     if (isOption(arg, 'project-dir')) { projectDir = optionValue(args, index, 'project-dir'); if (arg === '--project-dir') index += 1; continue }
     if (isOption(arg, 'instance')) { instanceId = optionValue(args, index, 'instance'); if (arg === '--instance') index += 1; continue }
     if (isOption(arg, 'storage')) { storageFile = optionValue(args, index, 'storage'); if (arg === '--storage') index += 1; continue }
+    if (isOption(arg, 'schedule')) {
+      const value = optionValue(args, index, 'schedule')
+      if (arg === '--schedule') index += 1
+      if (value !== 'manual' && value !== 'daily' && value !== 'weekdays' && value !== 'every') {
+        throw new Error('--schedule must be manual, daily, weekdays, or every')
+      }
+      scheduleMode = value
+      continue
+    }
+    if (isOption(arg, 'schedule-name')) { scheduleName = optionValue(args, index, 'schedule-name'); if (arg === '--schedule-name') index += 1; continue }
+    if (isOption(arg, 'time')) { scheduleTime = optionValue(args, index, 'time'); if (arg === '--time') index += 1; continue }
+    if (isOption(arg, 'timezone')) { timeZone = optionValue(args, index, 'timezone'); if (arg === '--timezone') index += 1; continue }
+    if (isOption(arg, 'every-seconds')) {
+      const value = optionValue(args, index, 'every-seconds')
+      if (arg === '--every-seconds') index += 1
+      everySeconds = Number(value)
+      if (!Number.isSafeInteger(everySeconds)) throw new Error('--every-seconds must be an integer')
+      continue
+    }
     if (isOption(arg, 'session')) {
       const [roleId, value] = bindingValue(optionValue(args, index, 'session'), 'session')
       if (arg === '--session') index += 1
@@ -150,6 +175,11 @@ export function parsePresetCliArgs(args: readonly string[], cwd = process.cwd())
     ...(workspace ? { workspace } : {}),
     ...(instanceId ? { instanceId } : {}),
     ...(storageFile ? { storageFile } : {}),
+    ...(scheduleMode ? { scheduleMode } : {}),
+    ...(scheduleName ? { scheduleName } : {}),
+    ...(scheduleTime ? { scheduleTime } : {}),
+    ...(timeZone ? { timeZone } : {}),
+    ...(everySeconds !== undefined ? { everySeconds } : {}),
     ...(allSession ? { allSession } : {}),
     ...(Object.keys(sessions).length ? { sessions } : {}),
     ...(Object.keys(roleAdapters).length ? { roleAdapters } : {}),
@@ -165,12 +195,12 @@ async function confirmInstall(
   stdout: Writable,
 ): Promise<boolean> {
   if (!(stdin as NodeJS.ReadStream).isTTY || !(stdout as NodeJS.WriteStream).isTTY) {
-    throw new Error('preset install requires confirmation in a non-interactive shell; rerun with --yes after reviewing --dry-run')
+    throw new Error('preset install/activation requires confirmation in a non-interactive shell; rerun with --yes after reviewing --dry-run')
   }
   renderInstallPlan(stdout, plan)
   const rl = createInterface({ input: stdin, output: stdout, terminal: true })
   try {
-    const answer = await rl.question(`Create pipeline ${JSON.stringify(plan.pipelineName)}? [y/N] `)
+    const answer = await rl.question(`Apply preset plan for ${JSON.stringify(plan.pipelineName)}? [y/N] `)
     return /^(y|yes)$/i.test(answer.trim())
   } finally {
     rl.close()
@@ -201,6 +231,12 @@ function writeOutput(stdout: Writable, value: unknown, json: boolean): void {
   if (isInstallResult(value)) {
     stdout.write(`${value.action === 'created' ? 'Created' : 'Reused'} ${value.pipelineName}\n`)
     stdout.write(`Pipeline id: ${value.pipelineId}\nStore: ${value.storageFile}\nWorkspace: ${value.workspace}\n`)
+    if (value.scheduleAction !== 'none') {
+      stdout.write(`${value.scheduleAction === 'created' ? 'Created' : 'Reused'} activation schedule: ${value.scheduleId ?? '(unknown)'}\n`)
+      if (value.nextRunAt) stdout.write(`Next run: ${value.nextRunAt}\n`)
+    } else {
+      stdout.write('Activation: manual\n')
+    }
     if (value.presetId === 'content-studio') stdout.write('Publishing is intentionally not automatic; review the final artifact before external side effects.\n')
     return
   }
@@ -209,7 +245,10 @@ function writeOutput(stdout: Writable, value: unknown, json: boolean): void {
 
 function renderInstallPlan(stdout: Writable, plan: PreparedPresetInstall): void {
   stdout.write(`${plan.preset.displayName} preset install plan\n`)
-  stdout.write(`  Pipeline: ${plan.pipelineName}\n  Store: ${plan.storageFile}\n  Workspace: ${plan.workspace}\n  Action: ${plan.action}\n`)
+  stdout.write(`  Pipeline: ${plan.pipelineName}\n  Store: ${plan.storageFile}\n  Workspace: ${plan.workspace}\n  Pipeline action: ${plan.action}\n`)
+  stdout.write(`  Activation: ${plan.schedule.mode} (${plan.schedule.action})\n`)
+  if (plan.schedule.timing) stdout.write(`  Schedule timing: ${JSON.stringify(plan.schedule.timing)}\n`)
+  if (plan.schedule.existingScheduleId) stdout.write(`  Existing schedule: ${plan.schedule.existingScheduleId}\n`)
   if (plan.bindings.length) {
     stdout.write('  Bindings:\n')
     for (const binding of plan.bindings) {
@@ -272,6 +311,13 @@ export function presetHelp(command: PresetCliCommand = 'list'): string {
     '  --skill=all=<a,b>             Bind optional Skills to every role',
     '  --skill=<role>=<a,b>          Bind optional Skills to one role',
     '',
+    'Activation:',
+    '  --schedule=manual             Install only; run explicitly later (default)',
+    '  --schedule=daily --time=08:00 [--timezone=Asia/Shanghai]',
+    '  --schedule=weekdays --time=08:00 [--timezone=Asia/Shanghai]',
+    '  --schedule=every --every-seconds=3600',
+    '  --schedule-name=<name>        Override the durable Schedule name',
+    '',
     'Preset input/storage:',
     '  --input=<text>                Editorial brief, research question, or team goal',
     '  --workspace=<path>            Durable artifact workspace',
@@ -279,8 +325,8 @@ export function presetHelp(command: PresetCliCommand = 'list'): string {
     '  --project-dir=<path>          Base directory for the default workspace',
     '  --instance=<id>               Flowit orchestration instance',
     '  --storage=<path>              Explicit workflow store (useful for DSH/project stores)',
-    '  --dry-run                     Show the exact Pipeline/store plan without mutation',
-    '  --yes, -y                     Confirm pipeline creation non-interactively',
+    '  --dry-run                     Show the exact Pipeline/Schedule/store plan without mutation',
+    '  --yes, -y                     Confirm Pipeline/Schedule creation non-interactively',
     '  --json                        Machine-readable output',
   ].join('\n')
 }
