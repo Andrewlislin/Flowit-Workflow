@@ -21,7 +21,6 @@ import {
   OPENCODE_SETUP_MANIFEST_VERSION,
   detectOpenCode,
   inspectOpenCodeState,
-  isInstallerOnlyOpenCodeConfig,
   openCodeDoctorChecks,
   openCodeManualSteps,
   openCodeSetupPaths,
@@ -366,11 +365,7 @@ async function applyAction(
       if (current === undefined || semanticHash(current) !== state.manifest.entryHash) return false
       const next = removeJsoncProperty(document, OPENCODE_MCP_PATH)
       parseJsoncDocument(next)
-      if (!state.manifest.configExistedBefore && isInstallerOnlyOpenCodeConfig(next)) {
-        await rm(state.paths.configFile, { force: true })
-      } else {
-        await durableWriteText(state.paths.configFile, next.endsWith('\n') ? next : `${next}\n`)
-      }
+      await durableWriteText(state.paths.configFile, next.endsWith('\n') ? next : `${next}\n`)
       return true
     }
     case 'remove-manifest': {
