@@ -250,7 +250,8 @@ export async function findCodexExecutable(context: HostSetupContext): Promise<st
   const explicit = context.env.FLOWIT_WORKFLOW_CODEX_BIN?.trim()
   if (explicit) {
     if (path.isAbsolute(explicit) || explicit.includes(path.sep)) {
-      return executableExists(path.resolve(explicit)) ? path.resolve(explicit) : undefined
+      const resolved = path.resolve(explicit)
+      return await executableExists(resolved) ? resolved : undefined
     }
     return findOnPath(explicit, context)
   }
