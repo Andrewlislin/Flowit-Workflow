@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { FlowitOrchestrationCore } from '../src/core/runtime.js'
 import { JsonWorkflowStore } from '../src/core/store.js'
 import { parsePresetCliArgs } from '../src/preset/cli.js'
 import { applyPresetInstall, preparePresetInstall } from '../src/preset/install.js'
@@ -165,6 +166,138 @@ test('preset schedule name conflicts fail closed instead of replacing automation
         scheduleName: 'Content Automation',
       }, f.registry, f.runtime),
       /schedule name .*already used by a different or ambiguous definition/,
+    )
+  } finally {
+    await rm(f.root, { recursive: true, force: true })
+  }
+})
+
+test('new preset schedule preflight rejects stale name conflicts before creating its pipeline', async () => {
+  const f = await fixture()
+  try {
+    const options = {
+      ...contentOptions(f.project, f.storage),
+      scheduleMode: 'daily' as const,
+      scheduleTime: '08:00',
+      timeZone: 'UTC',
+      scheduleName: 'Reserved Activation',
+    }
+    const stalePlan = await preparePresetInstall(options, f.registry, f.runtime)
+    assert.equal(stalePlan.action, 'create')
+
+    const control = new FlowitOrchestrationCore({
+      storageFile: f.storage,
+      defaultAdapterId: 'workbuddy',
+      activeWorkers: false,
+    })
+    try {
+      await control.ready
+      const blocker = await control.pipelines.create({
+        name: 'Unrelated pipeline',
+        trigger: { kind: 'manual' },
+        nodes: [{
+          id: 'work',
+          target: {
+            adapterId: 'workbuddy',
+            sessionId: 'unrelated',
+            prompt: 'unrelated',
+            skills: [],
+            contextRefs: [],
+          },
+          inheritUpstreamContext: false,
+        }],
+        edges: [],
+      })
+      await control.scheduler.create({
+        name: 'Reserved Activation',
+        pipelineId: blocker.id,
+        timing: { kind: 'every', everySeconds: 3600 },
+      })
+    } finally {
+      await control.dispose()
+    }
+
+    await assert.rejects(
+      applyPresetInstall(stalePlan),
+      /schedule name .*already used by a different or ambiguous definition/,
+    )
+    const state = await new JsonWorkflowStore(f.storage).snapshot()
+    assert.equal(state.pipelines.length, 1)
+    assert.equal(state.pipelines.some(pipeline => pipeline.name === 'Scheduled Content Studio'), false)
+  } finally {
+    await rm(f.root, { recursive: true, force: true })
+  }
+})
+
+test('scheduled preset preflight validates the IANA timezone before any pipeline mutation', async () => {
+  const f = await fixture()
+  try {
+    await assert.rejects(
+      preparePresetInstall({
+        ...contentOptions(f.project, f.storage),
+        scheduleMode: 'daily',
+        scheduleTime: '08:00',
+        timeZone: 'Not/AZone',
+      }, f.registry, f.runtime),
+      /invalid IANA time zone/,
+    )
+    const state = await new JsonWorkflowStore(f.storage).snapshot()
+    assert.equal(state.pipelines.length, 0)
+    assert.equal(state.schedules.length, 0)
+  } finally {
+    await rm(f.root, { recursive: true, force: true })
+  }
+})
+
+test('scheduled preset reuse fails closed when the identical pipeline is paused', async () => {
+  const f = await fixture()
+  try {
+    const options = {
+      ...contentOptions(f.project, f.storage),
+      scheduleMode: 'daily' as const,
+      scheduleTime: '08:00',
+      timeZone: 'UTC',
+    }
+    const installed = await applyPresetInstall(await preparePresetInstall(options, f.registry, f.runtime))
+    const control = new FlowitOrchestrationCore({ storageFile: f.storage, defaultAdapterId: 'workbuddy', activeWorkers: false })
+    try {
+      await control.ready
+      await control.pipelines.setStatus(installed.pipelineId, 'paused')
+    } finally {
+      await control.dispose()
+    }
+
+    await assert.rejects(
+      preparePresetInstall(options, f.registry, f.runtime),
+      /matches the preset but is paused/,
+    )
+  } finally {
+    await rm(f.root, { recursive: true, force: true })
+  }
+})
+
+test('scheduled preset reuse fails closed when the identical schedule was cancelled', async () => {
+  const f = await fixture()
+  try {
+    const options = {
+      ...contentOptions(f.project, f.storage),
+      scheduleMode: 'daily' as const,
+      scheduleTime: '08:00',
+      timeZone: 'UTC',
+    }
+    const installed = await applyPresetInstall(await preparePresetInstall(options, f.registry, f.runtime))
+    assert.ok(installed.scheduleId)
+    const control = new FlowitOrchestrationCore({ storageFile: f.storage, defaultAdapterId: 'workbuddy', activeWorkers: false })
+    try {
+      await control.ready
+      await control.scheduler.cancel(installed.scheduleId!)
+    } finally {
+      await control.dispose()
+    }
+
+    await assert.rejects(
+      preparePresetInstall(options, f.registry, f.runtime),
+      /matches the requested activation but is cancelled/,
     )
   } finally {
     await rm(f.root, { recursive: true, force: true })

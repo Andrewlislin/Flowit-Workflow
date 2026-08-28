@@ -118,7 +118,7 @@ export class PipelineRuntime {
     }
     for (const pipeline of state.pipelines) {
       if (pipeline.status !== 'active') continue
-      const runs = state.runs.filter(run => run.kind === 'pipeline' && run.definitionId === pipeline.id && !run.triggerKey.startsWith('manual:'))
+      const runs = state.runs.filter(run => run.kind === 'pipeline' && run.definitionId === pipeline.id && !run.triggerKey.startsWith('manual:') && !run.triggerKey.startsWith('schedule:'))
       const latestByTrigger = new Map<string, AutomationRunRecord>(); for (const run of runs) latestByTrigger.set(run.triggerKey, run)
       for (const run of latestByTrigger.values()) {
         if (run.status === 'completed' || run.status === 'dead_letter') continue
@@ -194,9 +194,19 @@ async function settleAllWithin(promises: Promise<unknown>[], timeoutMs: number):
 async function delay(ms: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted()
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(resolve, ms)
-    const abort = (): void => { clearTimeout(timer); reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted')) }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cleanup = (): void => signal?.removeEventListener('abort', abort)
+    const abort = (): void => {
+      if (timer) clearTimeout(timer)
+      cleanup()
+      reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted'))
+    }
+    timer = setTimeout(() => {
+      cleanup()
+      resolve()
+    }, ms)
     signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) abort()
     timer.unref?.()
   })
 }

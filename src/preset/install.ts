@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createScheduleRecord } from '../core/domain.js'
 import { FlowitOrchestrationCore } from '../core/runtime.js'
 import type { CreatePipelineInput, PipelineDefinition, ScheduledTask, ScheduleTiming } from '../core/types.js'
 import { defaultStoragePath, isBuiltInAdapterId, resolveConfiguredRuntime } from '../runtime-factory.js'
@@ -97,6 +98,7 @@ export async function preparePresetInstall(
     bindings,
   })
   const existing = await inspectExistingPipeline(storage, defaultAdapterId, pipeline)
+  if (existing && requestedSchedule.mode !== 'manual') ensureActivatablePipeline(existing)
   const schedule = await prepareSchedulePlan(
     storage,
     defaultAdapterId,
@@ -118,7 +120,9 @@ export async function applyPresetInstall(plan: PreparedPresetInstall): Promise<A
   if (plan.action === 'incomplete' || !plan.pipeline || !plan.defaultAdapterId) {
     throw new Error(`preset ${plan.preset.id} install plan is incomplete; review missing roles/input before applying`)
   }
-  await mkdir(plan.workspace, { recursive: true })
+  const requestedSchedule = plan.schedule.mode === 'manual' || !plan.schedule.timing
+    ? undefined
+    : validateScheduleRequest(plan.schedule, plan.defaultAdapterId)
   const core = new FlowitOrchestrationCore({
     storageFile: plan.storageFile,
     legacyStorageFiles: [...plan.legacyStorageFiles],
@@ -134,28 +138,43 @@ export async function applyPresetInstall(plan: PreparedPresetInstall): Promise<A
         `pipeline name ${JSON.stringify(plan.pipelineName)} is already used by a different or ambiguous definition; choose --name to avoid replacing user work`,
       )
     }
+    if (requestedSchedule && exact.length === 1) ensureActivatablePipeline(exact[0]!)
+
+    if (requestedSchedule?.timing) {
+      const sameScheduleName = (await core.scheduler.list()).filter(task => task.name === requestedSchedule.scheduleName)
+      if (exact.length === 0) {
+        if (sameScheduleName.length > 0) throwScheduleNameConflict(requestedSchedule.scheduleName)
+      } else {
+        const exactSchedules = sameScheduleName.filter(task => scheduleEquivalent(task, exact[0]!.id, requestedSchedule.timing!))
+        if (sameScheduleName.length > 0 && exactSchedules.length !== 1) {
+          throwScheduleNameConflict(requestedSchedule.scheduleName)
+        }
+        if (exactSchedules.length === 1) ensureReusableSchedule(exactSchedules[0]!)
+      }
+    }
+
+    await mkdir(plan.workspace, { recursive: true })
     const pipeline = exact.length === 1 ? exact[0]! : await core.pipelines.create(plan.pipeline)
     const pipelineAction = exact.length === 1 ? 'reused' as const : 'created' as const
 
-    if (plan.schedule.mode === 'manual' || plan.schedule.action === 'none' || !plan.schedule.timing) {
+    if (!requestedSchedule?.timing) {
       return result(plan, pipelineAction, pipeline.id, 'none')
     }
 
-    const sameScheduleName = (await core.scheduler.list()).filter(task => task.name === plan.schedule.scheduleName)
-    const exactSchedules = sameScheduleName.filter(task => scheduleEquivalent(task, pipeline.id, plan.schedule.timing!))
+    const sameScheduleName = (await core.scheduler.list()).filter(task => task.name === requestedSchedule.scheduleName)
+    const exactSchedules = sameScheduleName.filter(task => scheduleEquivalent(task, pipeline.id, requestedSchedule.timing!))
     if (sameScheduleName.length > 0 && exactSchedules.length !== 1) {
-      throw new Error(
-        `schedule name ${JSON.stringify(plan.schedule.scheduleName)} is already used by a different or ambiguous definition; choose --schedule-name to preserve existing automation`,
-      )
+      throwScheduleNameConflict(requestedSchedule.scheduleName)
     }
     if (exactSchedules.length === 1) {
       const schedule = exactSchedules[0]!
+      ensureReusableSchedule(schedule)
       return result(plan, pipelineAction, pipeline.id, 'reused', schedule)
     }
     const schedule = await core.scheduler.create({
-      name: plan.schedule.scheduleName,
+      name: requestedSchedule.scheduleName,
       pipelineId: pipeline.id,
-      timing: plan.schedule.timing,
+      timing: requestedSchedule.timing,
     })
     return result(plan, pipelineAction, pipeline.id, 'created', schedule)
   } finally {
@@ -198,7 +217,7 @@ async function prepareSchedulePlan(
   existingPipelineId?: string,
 ): Promise<PreparedPresetSchedule> {
   if (requested.mode === 'manual' || !requested.timing) return { ...requested, action: 'none' }
-  if (!existingPipelineId) return { ...requested, action: 'create' }
+  const validated = validateScheduleRequest(requested, defaultAdapterId)
   const core = new FlowitOrchestrationCore({
     storageFile: storage.storageFile,
     legacyStorageFiles: storage.legacyStorageFiles,
@@ -207,18 +226,60 @@ async function prepareSchedulePlan(
   })
   try {
     await core.ready
-    const sameName = (await core.scheduler.list()).filter(task => task.name === requested.scheduleName)
-    const exact = sameName.filter(task => scheduleEquivalent(task, existingPipelineId, requested.timing!))
-    if (sameName.length === 0) return { ...requested, action: 'create' }
-    if (sameName.length === 1 && exact.length === 1) {
-      return { ...requested, action: 'reuse', existingScheduleId: exact[0]!.id }
+    const sameName = (await core.scheduler.list()).filter(task => task.name === validated.scheduleName)
+    if (!existingPipelineId) {
+      if (sameName.length > 0) throwScheduleNameConflict(validated.scheduleName)
+      return { ...validated, action: 'create' }
     }
-    throw new Error(
-      `schedule name ${JSON.stringify(requested.scheduleName)} is already used by a different or ambiguous definition; choose --schedule-name to preserve existing automation`,
-    )
+    const exact = sameName.filter(task => scheduleEquivalent(task, existingPipelineId, validated.timing!))
+    if (sameName.length === 0) return { ...validated, action: 'create' }
+    if (sameName.length === 1 && exact.length === 1) {
+      ensureReusableSchedule(exact[0]!)
+      return { ...validated, action: 'reuse', existingScheduleId: exact[0]!.id }
+    }
+    throwScheduleNameConflict(validated.scheduleName)
   } finally {
     await core.dispose()
   }
+}
+
+function validateScheduleRequest(
+  requested: Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'>,
+  defaultAdapterId: string,
+): Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'> {
+  if (requested.mode === 'manual' || !requested.timing) return requested
+  const validated = createScheduleRecord(
+    'preset-schedule-preflight',
+    {
+      name: requested.scheduleName,
+      pipelineId: 'preset-pipeline-preflight',
+      timing: requested.timing,
+    },
+    new Date(),
+    60,
+    defaultAdapterId,
+  )
+  return { ...requested, timing: validated.timing }
+}
+
+function ensureActivatablePipeline(pipeline: PipelineDefinition): void {
+  if (pipeline.status === 'active') return
+  throw new Error(
+    `pipeline ${JSON.stringify(pipeline.name)} matches the preset but is ${pipeline.status}; reactivate it explicitly before enabling preset scheduling`,
+  )
+}
+
+function ensureReusableSchedule(schedule: ScheduledTask): void {
+  if (schedule.status === 'active' && schedule.nextRunAt) return
+  throw new Error(
+    `schedule ${JSON.stringify(schedule.name)} matches the requested activation but is ${schedule.status}; reactivate it explicitly or choose a different --schedule-name`,
+  )
+}
+
+function throwScheduleNameConflict(scheduleName: string): never {
+  throw new Error(
+    `schedule name ${JSON.stringify(scheduleName)} is already used by a different or ambiguous definition; choose --schedule-name to preserve existing automation`,
+  )
 }
 
 function resolveBindings(

@@ -20,12 +20,33 @@ class ScheduledPipelineAdapter implements AgentAdapter {
   async listSessions() { return [{ adapterId: this.id, sessionId: 'target', status: 'idle' as const }] }
   async dispatch(request: AgentDispatchRequest): Promise<AgentDispatchResult> {
     this.requests.push(request)
-    return {
-      sessionId: request.sessionId,
-      loadedSkills: request.skills,
-      referencedSessions: request.contextRefs.map(ref => ref.sessionId),
-      outputSummary: 'done',
-    }
+    return completedDispatch(request)
+  }
+}
+
+class AbortAwareScheduledPipelineAdapter extends ScheduledPipelineAdapter {
+  async dispatch(request: AgentDispatchRequest, signal?: AbortSignal): Promise<AgentDispatchResult> {
+    this.requests.push(request)
+    if (this.requests.length > 1) return completedDispatch(request)
+    await new Promise<void>((_resolve, reject) => {
+      const cleanup = (): void => signal?.removeEventListener('abort', abort)
+      const abort = (): void => {
+        cleanup()
+        reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted'))
+      }
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) abort()
+    })
+    return completedDispatch(request)
+  }
+}
+
+function completedDispatch(request: AgentDispatchRequest): AgentDispatchResult {
+  return {
+    sessionId: request.sessionId,
+    loadedSkills: request.skills,
+    referencedSessions: request.contextRefs.map(ref => ref.sessionId),
+    outputSummary: 'done',
   }
 }
 
@@ -122,6 +143,63 @@ test('two workers observing one scheduled pipeline occurrence execute its node o
     assert.equal(pipelineRuns[0]?.triggerKey, `schedule:${schedule.id}:${at}`)
   } finally {
     await Promise.all([first.dispose(), second.dispose()])
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('cancelling a scheduled pipeline does not let generic pipeline recovery revive it', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'flowit-scheduled-cancel-'))
+  const file = path.join(dir, 'state.json')
+  const adapter = new AbortAwareScheduledPipelineAdapter()
+  const core = new FlowitOrchestrationCore(
+    {
+      storageFile: file,
+      defaultAdapterId: adapter.id,
+      retryDelayMs: 100,
+      maxPipelineAttempts: 3,
+      maxScheduleAttempts: 3,
+    },
+    [adapter],
+  )
+  try {
+    const pipeline = await core.pipelines.create({
+      name: 'cancelled scheduled pipeline',
+      trigger: { kind: 'manual' },
+      nodes: [{
+        id: 'work',
+        target: {
+          adapterId: adapter.id,
+          sessionId: 'target',
+          prompt: 'scheduled work',
+          skills: [],
+          contextRefs: [],
+        },
+        inheritUpstreamContext: false,
+      }],
+      edges: [],
+    })
+    const schedule = await core.scheduler.create({
+      name: 'cancelled occurrence',
+      pipelineId: pipeline.id,
+      timing: { kind: 'at', at: new Date(Date.now() + 200).toISOString() },
+    })
+    await core.ready
+    await waitUntil(() => adapter.requests.length === 1)
+    await core.scheduler.cancel(schedule.id)
+    await waitUntil(async () => (
+      await core.store.snapshot()
+    ).runs.some(run => run.kind === 'pipeline' && run.definitionId === pipeline.id && run.status === 'failed'))
+
+    await new Promise(resolve => setTimeout(resolve, 1_300))
+    assert.equal(adapter.requests.length, 1)
+    const state = await core.store.snapshot()
+    assert.equal(state.schedules.find(item => item.id === schedule.id)?.status, 'cancelled')
+    assert.equal(
+      state.runs.filter(run => run.kind === 'pipeline' && run.definitionId === pipeline.id).length,
+      1,
+    )
+  } finally {
+    await core.dispose()
     await rm(dir, { recursive: true, force: true })
   }
 })
