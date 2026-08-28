@@ -13,6 +13,17 @@ interface FileLockOwner {
   acquiredAt: string
 }
 
+type OwnerInspection =
+  | { kind: 'missing' }
+  | { kind: 'valid'; owner: FileLockOwner }
+  | { kind: 'unknown-version'; version: unknown }
+  | { kind: 'malformed' }
+
+type LockInspection =
+  | { kind: 'missing' }
+  | { kind: 'legacy-file' }
+  | { kind: 'directory'; owner: OwnerInspection; ageMs: number }
+
 type AcquisitionResult =
   | { kind: 'acquired'; owner: FileLockOwner }
   | { kind: 'busy' }
@@ -86,14 +97,27 @@ export async function withGenerationFileLock<T>(
           return { kind: 'acquired', owner: candidate }
         }
         if (descriptor.kind === 'legacy-file') return { kind: 'busy' }
-        if (descriptor.owner) {
-          if (isProcessAlive(descriptor.owner.pid)) return { kind: 'busy' }
-          await moveAside(lockDir, `stale.${descriptor.owner.token}`)
-          return { kind: 'retry' }
+
+        switch (descriptor.owner.kind) {
+          case 'valid':
+            if (isProcessAlive(descriptor.owner.owner.pid)) return { kind: 'busy' }
+            await moveAside(lockDir, `stale.${descriptor.owner.owner.token}`)
+            return { kind: 'retry' }
+          case 'missing':
+            if (descriptor.ageMs < INITIALIZATION_GRACE_MS) return { kind: 'busy' }
+            await moveAside(lockDir, 'uninitialized')
+            return { kind: 'retry' }
+          case 'unknown-version':
+            throw new Error(
+              `filesystem lock ${lockDir} uses unknown owner version ${String(descriptor.owner.version)}; ` +
+                'refusing automatic recovery; manual recovery is required',
+            )
+          case 'malformed':
+            throw new Error(
+              `filesystem lock ${lockDir} has malformed owner metadata; ` +
+                'refusing automatic recovery; manual recovery is required',
+            )
         }
-        if (descriptor.ageMs < INITIALIZATION_GRACE_MS) return { kind: 'busy' }
-        await moveAside(lockDir, 'uninitialized')
-        return { kind: 'retry' }
       },
       remaining,
     )
@@ -153,7 +177,12 @@ async function releaseGeneration(
 ): Promise<void> {
   await withFailClosedMutex(mutationDir, async () => {
     const descriptor = await inspectLock(lockDir)
-    if (descriptor.kind !== 'directory' || descriptor.owner?.token !== owner.token) return
+    if (
+      descriptor.kind !== 'directory' ||
+      descriptor.owner.kind !== 'valid' ||
+      descriptor.owner.owner.token !== owner.token
+    )
+      return
     const releasing = `${lockDir}.release.${owner.token}`
     try {
       await rename(lockDir, releasing)
@@ -165,45 +194,50 @@ async function releaseGeneration(
   })
 }
 
-async function inspectLock(
-  lockDir: string,
-): Promise<
-  | { kind: 'missing' }
-  | { kind: 'legacy-file' }
-  | { kind: 'directory'; owner?: FileLockOwner; ageMs: number }
-> {
+async function inspectLock(lockDir: string): Promise<LockInspection> {
   try {
     const info = await stat(lockDir)
     if (!info.isDirectory()) return { kind: 'legacy-file' }
-    const owner = await readOwner(lockDir)
-    return owner
-      ? { kind: 'directory', owner, ageMs: Date.now() - info.mtimeMs }
-      : { kind: 'directory', ageMs: Date.now() - info.mtimeMs }
+    return {
+      kind: 'directory',
+      owner: await inspectOwner(lockDir),
+      ageMs: Date.now() - info.mtimeMs,
+    }
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
     throw error
   }
 }
 
-async function readOwner(lockDir: string): Promise<FileLockOwner | undefined> {
+async function inspectOwner(lockDir: string): Promise<OwnerInspection> {
+  let text: string
   try {
-    const value = JSON.parse(
-      await readFile(path.join(lockDir, 'owner.json'), 'utf8'),
-    ) as Partial<FileLockOwner>
-    if (
-      value.version !== 1 ||
-      typeof value.token !== 'string' ||
-      !Number.isSafeInteger(value.pid) ||
-      typeof value.acquiredAt !== 'string'
-    ) {
-      return undefined
-    }
-    return value as FileLockOwner
+    text = await readFile(path.join(lockDir, 'owner.json'), 'utf8')
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError)
-      return undefined
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
     throw error
   }
+
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch (error: unknown) {
+    if (error instanceof SyntaxError) return { kind: 'malformed' }
+    throw error
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'malformed' }
+
+  const row = value as Record<string, unknown>
+  if (!Object.prototype.hasOwnProperty.call(row, 'version')) return { kind: 'malformed' }
+  if (row.version !== 1) return { kind: 'unknown-version', version: row.version }
+  if (
+    typeof row.token !== 'string' ||
+    !Number.isSafeInteger(row.pid) ||
+    typeof row.acquiredAt !== 'string'
+  )
+    return { kind: 'malformed' }
+
+  return { kind: 'valid', owner: row as unknown as FileLockOwner }
 }
 
 async function writeOwner(lockDir: string, owner: FileLockOwner): Promise<void> {

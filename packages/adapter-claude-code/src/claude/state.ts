@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { open, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { AgentEvent, AgentSessionDescriptor } from '@coaseedge/flowit-core'
@@ -72,25 +72,35 @@ export class ClaudeSessionCatalog {
 export class ClaudeEventJournal {
   constructor(readonly filePath: string) {}
   async append(event: AgentEvent): Promise<void> {
-    await withGenerationFileLock(this.filePath, () =>
-      durableAppendText(this.filePath, `${JSON.stringify(event)}\n`),
-    )
+    await withGenerationFileLock(this.filePath, async () => {
+      if (await hasIncompleteJournalTail(this.filePath)) {
+        throw new Error(
+          `Claude event journal ${this.filePath} has an incomplete tail; ` +
+            'refusing to append until the journal is recovered',
+        )
+      }
+      await durableAppendText(this.filePath, `${JSON.stringify(event)}\n`)
+    })
   }
   async readAfter(lineOffset: number): Promise<{ events: AgentEvent[]; nextOffset: number }> {
-    try {
-      const lines = (await readFile(this.filePath, 'utf8')).split('\n').filter(Boolean)
-      const events = lines.slice(lineOffset).flatMap(line => {
+    return withGenerationFileLock(this.filePath, async () => {
+      const text = await readJournalText(this.filePath)
+      const lines = completeJournalLines(text)
+      const events: AgentEvent[] = []
+      for (let index = lineOffset; index < lines.length; index += 1) {
         try {
-          return [JSON.parse(line) as AgentEvent]
-        } catch {
-          return []
+          events.push(JSON.parse(lines[index]!) as AgentEvent)
+        } catch (error: unknown) {
+          if (events.length > 0) return { events, nextOffset: index }
+          throw new Error(
+            `Claude event journal ${this.filePath} contains a malformed record at line ${index + 1}; ` +
+              'cursor advancement is blocked until the journal is recovered',
+            { cause: error },
+          )
         }
-      })
+      }
       return { events, nextOffset: lines.length }
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { events: [], nextOffset: 0 }
-      throw error
-    }
+    })
   }
 }
 
@@ -127,6 +137,41 @@ export class ClaudeEventCursor {
       durableReplaceText(this.filePath, `${offset}\n`),
     )
     await advanceSharedCursor(this.legacyFilePath, offset)
+  }
+}
+
+function completeJournalLines(text: string): string[] {
+  if (!text) return []
+  const lines = text.split('\n')
+  lines.pop()
+  return lines
+}
+
+async function hasIncompleteJournalTail(filePath: string): Promise<boolean> {
+  let handle
+  try {
+    handle = await open(filePath, 'r')
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  try {
+    const info = await handle.stat()
+    if (info.size === 0) return false
+    const tail = Buffer.allocUnsafe(1)
+    await handle.read(tail, 0, 1, info.size - 1)
+    return tail[0] !== 0x0a
+  } finally {
+    await handle.close().catch(() => undefined)
+  }
+}
+
+async function readJournalText(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, 'utf8')
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+    throw error
   }
 }
 

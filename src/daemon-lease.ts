@@ -28,6 +28,17 @@ export interface AcquireDaemonLeaseOptions {
   acquisitionTimeoutMs?: number
 }
 
+type DaemonOwnerInspection =
+  | { kind: 'missing' }
+  | { kind: 'valid'; metadata: DaemonLeaseMetadata }
+  | { kind: 'unknown-version'; version: unknown }
+  | { kind: 'malformed' }
+
+type DaemonLeaseInspection =
+  | { kind: 'missing' }
+  | { kind: 'legacy-file' }
+  | { kind: 'directory'; owner: DaemonOwnerInspection; ageMs: number }
+
 type AcquisitionResult =
   | { kind: 'acquired'; lease: DaemonLease }
   | { kind: 'busy' }
@@ -63,15 +74,8 @@ export async function acquireDaemonLease(
     const result = await withFailClosedMutex(
       mutationDir,
       async (): Promise<AcquisitionResult> => {
-        const metadata = await readOwner(lockDir)
-        const exists = await stat(lockDir)
-          .then(() => true)
-          .catch(error => {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
-            throw error
-          })
-
-        if (!exists) {
+        const descriptor = await inspectLease(lockDir)
+        if (descriptor.kind === 'missing') {
           const ownerToken = randomUUID()
           try {
             await mkdir(lockDir)
@@ -95,22 +99,39 @@ export async function acquireDaemonLease(
           }
           return { kind: 'acquired', lease: createLease(lockDir, mutationDir, fresh) }
         }
-
-        if (!metadata) {
-          const age = await stat(lockDir)
-            .then(value => Date.now() - value.mtimeMs)
-            .catch(() => 0)
-          if (age < initializationGraceMs) return { kind: 'busy' }
-          await moveAside(lockDir, 'uninitialized')
-          return { kind: 'retry' }
-        }
-        if (isProcessAlive(metadata.pid)) {
+        if (descriptor.kind === 'legacy-file') {
           throw new Error(
-            `Flowit Workflow worker already owns storage ${canonicalStorageFile} (pid ${metadata.pid}, instance ${metadata.instanceId})`,
+            `Flowit Workflow lease ${lockDir} is not a directory; ` +
+              'refusing automatic recovery; manual recovery is required',
           )
         }
-        await moveAside(lockDir, `stale.${metadata.ownerToken}`)
-        return { kind: 'retry' }
+
+        switch (descriptor.owner.kind) {
+          case 'missing':
+            if (descriptor.ageMs < initializationGraceMs) return { kind: 'busy' }
+            await moveAside(lockDir, 'uninitialized')
+            return { kind: 'retry' }
+          case 'unknown-version':
+            throw new Error(
+              `Flowit Workflow lease ${lockDir} uses unknown owner version ${String(descriptor.owner.version)}; ` +
+                'refusing automatic recovery; manual recovery is required',
+            )
+          case 'malformed':
+            throw new Error(
+              `Flowit Workflow lease ${lockDir} has malformed owner metadata; ` +
+                'refusing automatic recovery; manual recovery is required',
+            )
+          case 'valid': {
+            const metadata = descriptor.owner.metadata
+            if (isProcessAlive(metadata.pid)) {
+              throw new Error(
+                `Flowit Workflow worker already owns storage ${canonicalStorageFile} (pid ${metadata.pid}, instance ${metadata.instanceId})`,
+              )
+            }
+            await moveAside(lockDir, `stale.${metadata.ownerToken}`)
+            return { kind: 'retry' }
+          }
+        }
       },
       Math.max(1, deadline - Date.now()),
     )
@@ -132,8 +153,13 @@ function createLease(
     storageFile: metadata.storageFile,
     async release(): Promise<boolean> {
       return withFailClosedMutex(mutationDir, async () => {
-        const current = await readOwner(lockDir)
-        if (!current || current.ownerToken !== metadata.ownerToken) return false
+        const descriptor = await inspectLease(lockDir)
+        if (
+          descriptor.kind !== 'directory' ||
+          descriptor.owner.kind !== 'valid' ||
+          descriptor.owner.metadata.ownerToken !== metadata.ownerToken
+        )
+          return false
         const releasing = `${lockDir}.release.${metadata.ownerToken}`
         try {
           await rename(lockDir, releasing)
@@ -148,28 +174,52 @@ function createLease(
   }
 }
 
-async function readOwner(lockDir: string): Promise<DaemonLeaseMetadata | undefined> {
+async function inspectLease(lockDir: string): Promise<DaemonLeaseInspection> {
   try {
-    const value = JSON.parse(
-      await readFile(path.join(lockDir, 'owner.json'), 'utf8'),
-    ) as DaemonLeaseMetadata
-    if (
-      value.version !== 1 ||
-      typeof value.ownerToken !== 'string' ||
-      !Number.isSafeInteger(value.pid) ||
-      typeof value.storageFile !== 'string'
-    )
-      return undefined
-    return value
+    const info = await stat(lockDir)
+    if (!info.isDirectory()) return { kind: 'legacy-file' }
+    return {
+      kind: 'directory',
+      owner: await inspectOwner(lockDir),
+      ageMs: Date.now() - info.mtimeMs,
+    }
   } catch (error: unknown) {
-    if (
-      (error as NodeJS.ErrnoException).code === 'ENOENT' ||
-      (error as NodeJS.ErrnoException).code === 'ENOTDIR' ||
-      error instanceof SyntaxError
-    )
-      return undefined
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
     throw error
   }
+}
+
+async function inspectOwner(lockDir: string): Promise<DaemonOwnerInspection> {
+  let text: string
+  try {
+    text = await readFile(path.join(lockDir, 'owner.json'), 'utf8')
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' }
+    throw error
+  }
+
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch (error: unknown) {
+    if (error instanceof SyntaxError) return { kind: 'malformed' }
+    throw error
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'malformed' }
+
+  const row = value as Record<string, unknown>
+  if (!Object.prototype.hasOwnProperty.call(row, 'version')) return { kind: 'malformed' }
+  if (row.version !== 1) return { kind: 'unknown-version', version: row.version }
+  if (
+    typeof row.ownerToken !== 'string' ||
+    !Number.isSafeInteger(row.pid) ||
+    typeof row.instanceId !== 'string' ||
+    typeof row.storageFile !== 'string' ||
+    typeof row.startedAt !== 'string'
+  )
+    return { kind: 'malformed' }
+
+  return { kind: 'valid', metadata: row as unknown as DaemonLeaseMetadata }
 }
 
 async function writeOwner(lockDir: string, metadata: DaemonLeaseMetadata): Promise<void> {

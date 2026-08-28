@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import os from 'node:os'
@@ -40,6 +40,12 @@ function runContender(
     child.on('error', reject)
     child.on('close', code => resolve({ code, stdout, stderr }))
   })
+}
+
+async function daemonLockDir(storage: string, leaseRoot: string): Promise<string> {
+  const canonical = await canonicalStorageIdentity(storage)
+  const key = createHash('sha256').update(canonical).digest('hex')
+  return path.join(leaseRoot, `${key}.lock`)
 }
 
 test('different instance ids cannot own the same canonical storage file concurrently', async () => {
@@ -126,9 +132,7 @@ test('an uninitialized directory lease is not deleted during its initialization 
   const storage = path.join(root, 'state', 'workflow.json')
   const leaseRoot = path.join(root, 'leases')
   try {
-    const canonical = await canonicalStorageIdentity(storage)
-    const key = createHash('sha256').update(canonical).digest('hex')
-    const lockDir = path.join(leaseRoot, `${key}.lock`)
+    const lockDir = await daemonLockDir(storage, leaseRoot)
     await mkdir(lockDir, { recursive: true })
     await assert.rejects(
       acquireDaemonLease('contender', storage, {
@@ -137,6 +141,63 @@ test('an uninitialized directory lease is not deleted during its initialization 
         acquisitionTimeoutMs: 120,
       }),
       /timed out acquiring/,
+    )
+    await access(lockDir)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('daemon lease fails closed on an unknown published owner version regardless of age', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-daemon-version-'))
+  const storage = path.join(root, 'state', 'workflow.json')
+  const leaseRoot = path.join(root, 'leases')
+  try {
+    const canonical = await canonicalStorageIdentity(storage)
+    const lockDir = await daemonLockDir(storage, leaseRoot)
+    await mkdir(lockDir, { recursive: true })
+    await writeFile(
+      path.join(lockDir, 'owner.json'),
+      `${JSON.stringify({ version: 2, ownerToken: 'future', pid: process.pid, instanceId: 'future', storageFile: canonical, startedAt: new Date().toISOString() })}\n`,
+      'utf8',
+    )
+    const old = new Date(Date.now() - 60_000)
+    await utimes(lockDir, old, old)
+    await assert.rejects(
+      acquireDaemonLease('contender', storage, {
+        root: leaseRoot,
+        initializationGraceMs: 1,
+        acquisitionTimeoutMs: 200,
+      }),
+      /unknown owner version 2|manual recovery/i,
+    )
+    await access(lockDir)
+    const owner = JSON.parse(await readFile(path.join(lockDir, 'owner.json'), 'utf8')) as {
+      version: number
+    }
+    assert.equal(owner.version, 2)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('daemon lease fails closed on malformed published owner metadata', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-daemon-malformed-'))
+  const storage = path.join(root, 'state', 'workflow.json')
+  const leaseRoot = path.join(root, 'leases')
+  try {
+    const lockDir = await daemonLockDir(storage, leaseRoot)
+    await mkdir(lockDir, { recursive: true })
+    await writeFile(path.join(lockDir, 'owner.json'), '{not-json\n', 'utf8')
+    const old = new Date(Date.now() - 60_000)
+    await utimes(lockDir, old, old)
+    await assert.rejects(
+      acquireDaemonLease('contender', storage, {
+        root: leaseRoot,
+        initializationGraceMs: 1,
+        acquisitionTimeoutMs: 200,
+      }),
+      /malformed owner metadata|manual recovery/i,
     )
     await access(lockDir)
   } finally {
@@ -172,8 +233,7 @@ test('two contenders cannot both take over the same stale daemon generation', as
   const fixture = fileURLToPath(new URL('./fixtures/daemon-lease-child.ts', import.meta.url))
   try {
     const canonical = await canonicalStorageIdentity(storage)
-    const key = createHash('sha256').update(canonical).digest('hex')
-    const lockDir = path.join(leaseRoot, `${key}.lock`)
+    const lockDir = await daemonLockDir(storage, leaseRoot)
     await mkdir(lockDir, { recursive: true })
     await writeFile(
       path.join(lockDir, 'owner.json'),

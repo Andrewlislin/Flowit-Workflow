@@ -31,6 +31,8 @@ class StartupAdapter implements AgentAdapter {
     id = 'startup',
     private readonly ignoreAbort = false,
     private readonly disposalGate?: Promise<void>,
+    private readonly onStartSettled?: () => void,
+    private readonly onDispose?: () => void,
   ) {
     this.id = id
   }
@@ -38,6 +40,7 @@ class StartupAdapter implements AgentAdapter {
     this.starts += 1
     if (this.ignoreAbort || !signal) {
       await this.gate
+      this.onStartSettled?.()
       return
     }
     signal.throwIfAborted()
@@ -54,6 +57,7 @@ class StartupAdapter implements AgentAdapter {
           .catch(() => undefined)
       }),
     ])
+    this.onStartSettled?.()
   }
   succeed(): void {
     this.resolveStart?.()
@@ -76,6 +80,7 @@ class StartupAdapter implements AgentAdapter {
   async dispose(): Promise<void> {
     this.disposals += 1
     await this.disposalGate
+    this.onDispose?.()
   }
 }
 
@@ -196,8 +201,46 @@ test('same-id adapter replacement fences an old generation even when its start i
 
   first.succeed()
   await secondStart
+  assert.equal(first.disposals, 1)
   assert.equal(second.starts, 1)
   assert.equal(registry.require('same'), second)
+  await registry.dispose()
+})
+
+test('disposal runs after an abort-ignoring startup settles and cleans late resources', async () => {
+  const registry = new AgentAdapterRegistry()
+  let resourceActive = false
+  const first = new StartupAdapter(
+    'late-resource',
+    true,
+    undefined,
+    () => {
+      resourceActive = true
+    },
+    () => {
+      resourceActive = false
+    },
+  )
+  const unregister = registry.register(first)
+  const firstStart = registry.start(first)
+  await waitUntil(() => first.starts === 1)
+  unregister()
+  await assert.rejects(firstStart, /unregistered/)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(first.disposals, 0)
+
+  const second = new StartupAdapter('late-resource')
+  second.succeed()
+  registry.register(second)
+  const secondStart = registry.start(second)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(second.starts, 0)
+
+  first.succeed()
+  await waitUntil(() => first.disposals === 1)
+  assert.equal(resourceActive, false)
+  await secondStart
+  assert.equal(second.starts, 1)
   await registry.dispose()
 })
 

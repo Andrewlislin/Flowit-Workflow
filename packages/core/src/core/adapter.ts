@@ -131,16 +131,9 @@ export class AgentAdapterRegistry {
 
   private beginDisposal(adapter: AgentAdapter, startup?: Promise<void>): Promise<void> {
     const predecessor = this.disposalFences.get(adapter.id)
-    const ownDisposal = disposeAdapter(adapter, ADAPTER_DISPOSE_TIMEOUT_MS)
-    const startupSettlement = startup
-      ? settleStartup(adapter.id, startup, ADAPTER_DISPOSE_TIMEOUT_MS)
-      : Promise.resolve()
+    const cleanup = cleanupAfterStartup(adapter, startup, ADAPTER_DISPOSE_TIMEOUT_MS)
     const disposal = (async () => {
-      const outcomes = await Promise.allSettled([
-        ...(predecessor ? [predecessor] : []),
-        startupSettlement,
-        ownDisposal,
-      ])
+      const outcomes = await Promise.allSettled([...(predecessor ? [predecessor] : []), cleanup])
       const errors = outcomes.flatMap(outcome =>
         outcome.status === 'rejected' ? [outcome.reason] : [],
       )
@@ -162,6 +155,31 @@ export class AgentAdapterRegistry {
     )
     return disposal
   }
+}
+
+async function cleanupAfterStartup(
+  adapter: AgentAdapter,
+  startup: Promise<void> | undefined,
+  timeoutMs: number,
+): Promise<void> {
+  if (!startup) {
+    await disposeAdapter(adapter, timeoutMs)
+    return
+  }
+
+  try {
+    await settleStartup(adapter.id, startup, timeoutMs)
+  } catch (error) {
+    void startup
+      .then(
+        () => disposeAdapter(adapter, timeoutMs),
+        () => disposeAdapter(adapter, timeoutMs),
+      )
+      .catch(() => undefined)
+    throw error
+  }
+
+  await disposeAdapter(adapter, timeoutMs)
 }
 
 async function disposeAdapter(adapter: AgentAdapter, timeoutMs: number): Promise<void> {
