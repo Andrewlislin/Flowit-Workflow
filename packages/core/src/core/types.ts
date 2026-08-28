@@ -1,15 +1,68 @@
 export type AdapterId = string
-export type AgentEventKind = 'session_started' | 'session_ended' | 'turn_completed' | 'turn_failed' | 'task_completed' | 'subagent_completed'
+export type AgentEventKind =
+  | 'session_started'
+  | 'session_ended'
+  | 'turn_completed'
+  | 'turn_failed'
+  | 'task_completed'
+  | 'subagent_completed'
 
-export interface AgentSessionRef { adapterId?: AdapterId; sessionId: string; label?: string }
-export interface AgentSessionDescriptor { adapterId: AdapterId; sessionId: string; name?: string; cwd?: string; status: 'live' | 'idle' | 'ended' | 'unknown'; updatedAt?: string }
+export interface AgentSessionRef {
+  adapterId?: AdapterId
+  sessionId: string
+  label?: string
+}
+export interface AgentSessionDescriptor {
+  adapterId: AdapterId
+  sessionId: string
+  name?: string
+  cwd?: string
+  status: 'live' | 'idle' | 'ended' | 'unknown'
+  updatedAt?: string
+}
 export interface SessionContextRef extends AgentSessionRef {}
-export interface AutomationTarget { adapterId?: AdapterId; sessionId: string; prompt: string; skills: string[]; contextRefs: SessionContextRef[] }
-export interface AdapterContextRef { adapterId: AdapterId; sessionId: string; label?: string }
-export interface AgentDispatchRequest { correlationId: string; sessionId: string; prompt: string; skills: string[]; contextRefs: AdapterContextRef[]; attempt?: number }
-export interface AgentDispatchResult { sessionId: string; loadedSkills: string[]; referencedSessions: string[]; runId?: string; outputSummary?: string }
-export interface AgentEvent { adapterId: AdapterId; sessionId: string; kind: AgentEventKind; eventId: string; at: string; metadata?: Record<string, unknown> }
-export interface AgentAdapterCapabilities { coldResume: boolean; liveDispatch: boolean; skillBinding: boolean; contextReference: 'native' | 'summary' | 'none'; eventSubscription: boolean }
+export interface AutomationTarget {
+  adapterId?: AdapterId
+  sessionId: string
+  prompt: string
+  skills: string[]
+  contextRefs: SessionContextRef[]
+}
+export interface AdapterContextRef {
+  adapterId: AdapterId
+  sessionId: string
+  label?: string
+}
+export interface AgentDispatchRequest {
+  correlationId: string
+  sessionId: string
+  prompt: string
+  skills: string[]
+  contextRefs: AdapterContextRef[]
+  attempt?: number
+}
+export interface AgentDispatchResult {
+  sessionId: string
+  loadedSkills: string[]
+  referencedSessions: string[]
+  runId?: string
+  outputSummary?: string
+}
+export interface AgentEvent {
+  adapterId: AdapterId
+  sessionId: string
+  kind: AgentEventKind
+  eventId: string
+  at: string
+  metadata?: Record<string, unknown>
+}
+export interface AgentAdapterCapabilities {
+  coldResume: boolean
+  liveDispatch: boolean
+  skillBinding: boolean
+  contextReference: 'native' | 'summary' | 'none'
+  eventSubscription: boolean
+}
 export interface AgentAdapter {
   readonly id: AdapterId
   readonly capabilities: AgentAdapterCapabilities
@@ -22,11 +75,45 @@ export interface AgentAdapter {
 
 export type AutomationStatus = 'active' | 'paused' | 'completed' | 'cancelled' | 'failed'
 export type ScheduleTiming = { kind: 'at'; at: string } | { kind: 'every'; everySeconds: number }
-export interface ScheduledTask { id: string; name: string; target: AutomationTarget; timing: ScheduleTiming; status: AutomationStatus; nextRunAt?: string; lastRunAt?: string; createdAt: string; updatedAt: string }
-export interface PipelineNode { id: string; target: AutomationTarget; inheritUpstreamContext: boolean }
-export interface PipelineEdge { from: string; to: string }
-export type PipelineTrigger = { kind: 'manual' } | { kind: 'agent_event'; adapterId?: AdapterId; sessionId: string; event: Extract<AgentEventKind, 'turn_completed' | 'task_completed' | 'subagent_completed'> } | { kind: 'session_turn_completed'; adapterId?: AdapterId; sessionId: string }
-export interface PipelineDefinition { id: string; name: string; trigger: PipelineTrigger; nodes: PipelineNode[]; edges: PipelineEdge[]; status: 'active' | 'paused'; createdAt: string; updatedAt: string }
+export interface ScheduledTask {
+  id: string
+  name: string
+  target: AutomationTarget
+  timing: ScheduleTiming
+  status: AutomationStatus
+  nextRunAt?: string
+  lastRunAt?: string
+  createdAt: string
+  updatedAt: string
+}
+export interface PipelineNode {
+  id: string
+  target: AutomationTarget
+  inheritUpstreamContext: boolean
+}
+export interface PipelineEdge {
+  from: string
+  to: string
+}
+export type PipelineTrigger =
+  | { kind: 'manual' }
+  | {
+      kind: 'agent_event'
+      adapterId?: AdapterId
+      sessionId: string
+      event: Extract<AgentEventKind, 'turn_completed' | 'task_completed' | 'subagent_completed'>
+    }
+  | { kind: 'session_turn_completed'; adapterId?: AdapterId; sessionId: string }
+export interface PipelineDefinition {
+  id: string
+  name: string
+  trigger: PipelineTrigger
+  nodes: PipelineNode[]
+  edges: PipelineEdge[]
+  status: 'active' | 'paused'
+  createdAt: string
+  updatedAt: string
+}
 
 export interface PipelineEventAdmission {
   id: string
@@ -40,7 +127,14 @@ export interface PipelineEventAdmission {
 }
 
 export type AutomationRunStatus = 'running' | 'completed' | 'failed' | 'dead_letter'
-export interface AutomationRunNodeResult { nodeId: string; adapterId: AdapterId; sessionId: string; loadedSkills: string[]; referencedSessions: string[]; outputSummary?: string }
+export interface AutomationRunNodeResult {
+  nodeId: string
+  adapterId: AdapterId
+  sessionId: string
+  loadedSkills: string[]
+  referencedSessions: string[]
+  outputSummary?: string
+}
 export interface AutomationRunRecord {
   id: string
   kind: 'schedule' | 'pipeline'
@@ -59,8 +153,21 @@ export interface AutomationRunRecord {
   permanentDedupe?: boolean
   nodeResults?: AutomationRunNodeResult[]
 }
-export interface AutomationTerminalReceipt { kind: 'schedule' | 'pipeline'; definitionId: string; triggerKey: string; status: 'completed' | 'dead_letter'; recordedAt: string }
-export interface WorkflowState { version: 1; schedules: ScheduledTask[]; pipelines: PipelineDefinition[]; eventInbox: PipelineEventAdmission[]; runs: AutomationRunRecord[]; terminalReceipts: AutomationTerminalReceipt[] }
+export interface AutomationTerminalReceipt {
+  kind: 'schedule' | 'pipeline'
+  definitionId: string
+  triggerKey: string
+  status: 'completed' | 'dead_letter'
+  recordedAt: string
+}
+export interface WorkflowState {
+  version: 1
+  schedules: ScheduledTask[]
+  pipelines: PipelineDefinition[]
+  eventInbox: PipelineEventAdmission[]
+  runs: AutomationRunRecord[]
+  terminalReceipts: AutomationTerminalReceipt[]
+}
 
 export interface FlowitCoreConfig {
   storageFile?: string
@@ -70,6 +177,7 @@ export interface FlowitCoreConfig {
   maxRunHistory?: number
   maxTerminalReceipts?: number
   terminalReceiptRetentionMs?: number
+  maxEventInbox?: number
   activeWorkers?: boolean
   workerId?: string
   leaseDurationMs?: number
@@ -77,6 +185,22 @@ export interface FlowitCoreConfig {
   maxPipelineAttempts?: number
   maxScheduleAttempts?: number
 }
-export interface CreateScheduleInput { name: string; target: AutomationTarget; timing: ScheduleTiming }
-export interface CreatePipelineInput { name: string; trigger: PipelineTrigger; nodes: PipelineNode[]; edges: PipelineEdge[] }
-export interface LinearPipelineStepInput { id: string; adapterId?: AdapterId; sessionId: string; prompt: string; skills?: string[]; contextSessions?: Array<string | SessionContextRef> }
+export interface CreateScheduleInput {
+  name: string
+  target: AutomationTarget
+  timing: ScheduleTiming
+}
+export interface CreatePipelineInput {
+  name: string
+  trigger: PipelineTrigger
+  nodes: PipelineNode[]
+  edges: PipelineEdge[]
+}
+export interface LinearPipelineStepInput {
+  id: string
+  adapterId?: AdapterId
+  sessionId: string
+  prompt: string
+  skills?: string[]
+  contextSessions?: Array<string | SessionContextRef>
+}

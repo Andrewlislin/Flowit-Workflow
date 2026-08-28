@@ -58,4 +58,37 @@ for (const filename of await walk('packages/core/src')) {
   }
 }
 
+const compatibilityWrappers = [
+  ...['adapter','context-graph','dispatcher','domain','lease','pipeline','runtime','scheduler','skill-binding','store','types','utils'].map(name => `src/core/${name}.ts`),
+  ...['execution-lease','hook','receipt','state'].map(name => `src/bridge/${name}.ts`),
+  ...['claude-code','opencode','codex','dsh','file-bridge','workbuddy','doubao-office'].map(name => `src/adapters/${name}.ts`),
+]
+for (const filename of compatibilityWrappers) {
+  const source = (await readFile(filename, 'utf8')).trim()
+  assertPureWorkspaceReExport(filename, source)
+}
+
 console.log(`Package boundary policy passed for ${manifests.size} workspace packages.`)
+
+function assertPureWorkspaceReExport(filename, source) {
+  const statement = /export\s+\*\s+from\s+(['"])(@coaseedge\/flowit-[^'"]+)\1\s*;?/gy
+  let offset = 0
+  let exports = 0
+  while (offset < source.length) {
+    statement.lastIndex = offset
+    const match = statement.exec(source)
+    if (!match) {
+      throw new Error(
+        `compatibility wrapper ${filename} must contain only workspace export-all declarations`,
+      )
+    }
+    exports += 1
+    offset = statement.lastIndex
+    while (offset < source.length && /\s/.test(source[offset])) offset += 1
+  }
+  if (exports === 0) {
+    throw new Error(
+      `compatibility wrapper ${filename} must contain only workspace export-all declarations`,
+    )
+  }
+}

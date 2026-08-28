@@ -1,5 +1,6 @@
 import { mkdir, rm, readdir } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
+import path from 'node:path'
 
 const out = '.tmp-packs'
 await rm(out, { recursive: true, force: true })
@@ -24,4 +25,14 @@ const tarballs = (await readdir(out)).filter(name => name.endsWith('.tgz'))
 if (tarballs.length !== packages.length + 1) {
   throw new Error(`expected ${packages.length + 1} package tarballs, found ${tarballs.length}`)
 }
-console.log(`Package pack smoke test passed for ${tarballs.length} tarballs.`)
+for (const tarball of tarballs) {
+  const packed = spawnSync('tar', ['-xOzf', path.join(out, tarball), 'package/package.json'], { encoding: 'utf8' })
+  if (packed.status !== 0) throw new Error(`cannot inspect packed manifest for ${tarball}: ${packed.stderr}`)
+  const manifest = JSON.parse(packed.stdout)
+  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const [name, specifier] of Object.entries(manifest[section] ?? {})) {
+      if (typeof specifier === 'string' && specifier.startsWith('workspace:')) throw new Error(`${tarball} leaked workspace protocol for ${section}.${name}`)
+    }
+  }
+}
+console.log(`Package pack smoke test passed for ${tarballs.length} tarballs with publishable manifests.`)

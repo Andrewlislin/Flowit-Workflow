@@ -1,6 +1,6 @@
 # AgentAdapter contract
 
-`src/core/types.ts` is the host boundary.
+`packages/core/src/core/types.ts` is the host boundary. The root `src/core/*` files are compatibility re-exports only.
 
 An adapter translates host-specific lifecycle and execution into the Core model:
 
@@ -67,7 +67,7 @@ Adapters that can replay/cursor their own source should advance host acknowledge
 
 ## Adding the next adapter
 
-A future `GeminiCliAgentAdapter`, `OpenHandsAgentAdapter`, etc. should be added under `src/adapters/` with:
+A future `GeminiCliAgentAdapter`, `OpenHandsAgentAdapter`, etc. should be added as a dedicated `packages/adapter-*/` workspace package with:
 
 - a pinned host contract test;
 - lifecycle cancellation coverage when startup owns resources;

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { link, mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { link, mkdir, open, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import type { AgentDispatchResult } from '../core/types.js'
 
@@ -13,27 +13,45 @@ export interface BridgeReceipt {
 
 class InvalidBridgeReceiptError extends Error {}
 
-export async function readCompletedBridgeReceipt(file: string, idempotencyKey: string): Promise<AgentDispatchResult | undefined> {
+export async function readCompletedBridgeReceipt(
+  file: string,
+  idempotencyKey: string,
+): Promise<AgentDispatchResult | undefined> {
   try {
     const receipt = parseReceipt(await readFile(file, 'utf8'))
-    if (receipt.idempotencyKey !== idempotencyKey) throw new InvalidBridgeReceiptError(`bridge receipt idempotency key mismatch for ${file}`)
+    if (receipt.idempotencyKey !== idempotencyKey)
+      throw new InvalidBridgeReceiptError(`bridge receipt idempotency key mismatch for ${file}`)
     return receipt.result
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     if (error instanceof SyntaxError || error instanceof InvalidBridgeReceiptError) {
-      await quarantineReceipt(file)
-      return undefined
+      throw new InvalidBridgeReceiptError(
+        `bridge receipt ${file} is malformed; automatic quarantine is disabled to avoid racing a concurrent publisher`,
+      )
     }
     throw error
   }
 }
 
-export async function publishCompletedBridgeReceipt(file: string, idempotencyKey: string, result: AgentDispatchResult): Promise<AgentDispatchResult> {
+export async function publishCompletedBridgeReceipt(
+  file: string,
+  idempotencyKey: string,
+  result: AgentDispatchResult,
+): Promise<AgentDispatchResult> {
   assertDispatchResult(result)
   const directory = path.dirname(file)
   await mkdir(directory, { recursive: true })
-  const receipt: BridgeReceipt = { version: 1, idempotencyKey, status: 'completed', completedAt: new Date().toISOString(), result }
-  const temporary = path.join(directory, `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`)
+  const receipt: BridgeReceipt = {
+    version: 1,
+    idempotencyKey,
+    status: 'completed',
+    completedAt: new Date().toISOString(),
+    result,
+  }
+  const temporary = path.join(
+    directory,
+    `.${path.basename(file)}.${process.pid}.${randomUUID()}.tmp`,
+  )
   const handle = await open(temporary, 'wx')
   try {
     await handle.writeFile(`${JSON.stringify(receipt, null, 2)}\n`, 'utf8')
@@ -61,34 +79,50 @@ export async function publishCompletedBridgeReceipt(file: string, idempotencyKey
 
 function parseReceipt(raw: string): BridgeReceipt {
   const value = JSON.parse(raw) as Partial<BridgeReceipt>
-  if (value.version !== 1 || value.status !== 'completed' || typeof value.idempotencyKey !== 'string' || typeof value.completedAt !== 'string') throw new InvalidBridgeReceiptError('invalid bridge receipt envelope')
+  if (
+    value.version !== 1 ||
+    value.status !== 'completed' ||
+    typeof value.idempotencyKey !== 'string' ||
+    typeof value.completedAt !== 'string'
+  )
+    throw new InvalidBridgeReceiptError('invalid bridge receipt envelope')
   assertDispatchResult(value.result)
   return value as BridgeReceipt
 }
 
 function assertDispatchResult(value: unknown): asserts value is AgentDispatchResult {
-  if (!value || typeof value !== 'object') throw new InvalidBridgeReceiptError('bridge receipt result must be an object')
+  if (!value || typeof value !== 'object')
+    throw new InvalidBridgeReceiptError('bridge receipt result must be an object')
   const row = value as Partial<AgentDispatchResult>
-  if (typeof row.sessionId !== 'string' || !Array.isArray(row.loadedSkills) || !row.loadedSkills.every(item => typeof item === 'string') || !Array.isArray(row.referencedSessions) || !row.referencedSessions.every(item => typeof item === 'string')) throw new InvalidBridgeReceiptError('bridge receipt result is malformed')
-  if (row.outputSummary !== undefined && typeof row.outputSummary !== 'string') throw new InvalidBridgeReceiptError('bridge receipt outputSummary is malformed')
-  if (row.runId !== undefined && typeof row.runId !== 'string') throw new InvalidBridgeReceiptError('bridge receipt runId is malformed')
-}
-
-async function quarantineReceipt(file: string): Promise<void> {
-  const quarantineDir = path.join(path.dirname(file), 'quarantine')
-  await mkdir(quarantineDir, { recursive: true })
-  const target = path.join(quarantineDir, `${path.basename(file)}.${Date.now()}.${randomUUID()}.corrupt`)
-  try { await rename(file, target); await syncDirectory(path.dirname(file)) }
-  catch (error: unknown) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+  if (
+    typeof row.sessionId !== 'string' ||
+    !Array.isArray(row.loadedSkills) ||
+    !row.loadedSkills.every(item => typeof item === 'string') ||
+    !Array.isArray(row.referencedSessions) ||
+    !row.referencedSessions.every(item => typeof item === 'string')
+  )
+    throw new InvalidBridgeReceiptError('bridge receipt result is malformed')
+  if (row.outputSummary !== undefined && typeof row.outputSummary !== 'string')
+    throw new InvalidBridgeReceiptError('bridge receipt outputSummary is malformed')
+  if (row.runId !== undefined && typeof row.runId !== 'string')
+    throw new InvalidBridgeReceiptError('bridge receipt runId is malformed')
 }
 
 async function syncDirectory(directory: string): Promise<void> {
   try {
     const handle = await open(directory, 'r')
-    try { await handle.sync() } finally { await handle.close().catch(() => undefined) }
+    try {
+      await handle.sync()
+    } finally {
+      await handle.close().catch(() => undefined)
+    }
   } catch (error: unknown) {
     const code = (error as NodeJS.ErrnoException).code
-    if (process.platform === 'win32' && (code === 'EACCES' || code === 'EPERM' || code === 'EINVAL')) return
+    if (
+      process.platform === 'win32' &&
+      (code === 'EACCES' || code === 'EPERM' || code === 'EINVAL')
+    )
+      return
     throw error
   }
 }
