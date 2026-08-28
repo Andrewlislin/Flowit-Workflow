@@ -9,9 +9,11 @@ import { startLeaseHeartbeat } from './lease.js'
 
 const DEFAULT_RECONCILE_MS = 1_000
 const DISPOSE_QUEUE_GRACE_MS = 3_000
-const EXTERNAL_TRIGGER_RECHECK_MS = 50
+const EXTERNAL_TRIGGER_RECHECK_MIN_MS = 50
+const EXTERNAL_TRIGGER_RECHECK_MAX_MS = 1_000
 export interface PipelineRuntimeOptions { workerId: string; leaseDurationMs: number; retryDelayMs: number; maxAttempts: number }
 type PipelineExecutionOutcome = 'completed' | 'dead_letter' | 'busy'
+type ExternalTriggerWaitOutcome = Exclude<PipelineExecutionOutcome, 'busy'> | 'claimable'
 
 export class PipelineRuntime {
   private readonly queues = new Map<string, Promise<void>>()
@@ -48,7 +50,9 @@ export class PipelineRuntime {
       const outcome = await this.enqueue(pipeline, normalized, signal)
       if (outcome === 'completed') return
       if (outcome === 'dead_letter') throw new Error(`pipeline ${id} trigger ${normalized} is dead-lettered`)
-      await delay(EXTERNAL_TRIGGER_RECHECK_MS, signal)
+      const waited = await this.waitForExternalTrigger(id, normalized, signal)
+      if (waited === 'completed') return
+      if (waited === 'dead_letter') throw new Error(`pipeline ${id} trigger ${normalized} is dead-lettered`)
     }
   }
   setStatus(id: string, status: 'active' | 'paused'): Promise<PipelineDefinition> { return this.serializeDefinitionMutation(async () => this.store.transact(state => { const index = state.pipelines.findIndex(candidate => candidate.id === id); if (index < 0) throw new Error(`unknown pipeline ${id}`); const current = state.pipelines[index]!; const updated: PipelineDefinition = { ...current, status, updatedAt: new Date().toISOString() }; if (status === 'active') { const candidates = state.pipelines.map((candidate, candidateIndex) => candidateIndex === index ? updated : candidate); assertNoAutonomousSessionCycle(candidates, this.defaultAdapterId) } state.pipelines[index] = updated; return updated })) }
@@ -72,6 +76,38 @@ export class PipelineRuntime {
     if (!pipeline) throw new Error(`unknown pipeline ${id}`)
     if (pipeline.status !== 'active') throw new Error(`pipeline ${id} is ${pipeline.status}`)
     return pipeline
+  }
+
+  private async waitForExternalTrigger(
+    pipelineId: string,
+    triggerKey: string,
+    signal?: AbortSignal,
+  ): Promise<ExternalTriggerWaitOutcome> {
+    let recheckMs = EXTERNAL_TRIGGER_RECHECK_MIN_MS
+    for (;;) {
+      signal?.throwIfAborted()
+      const state = await this.store.snapshot()
+      const runs = state.runs.filter(
+        run =>
+          run.kind === 'pipeline' &&
+          run.definitionId === pipelineId &&
+          run.triggerKey === triggerKey,
+      )
+      if (runs.some(run => run.status === 'completed')) return 'completed'
+      const latest = runs.at(-1)
+      if (latest?.status === 'dead_letter') return 'dead_letter'
+
+      const now = Date.now()
+      const busyUntil = latest?.status === 'running'
+        ? Date.parse(latest.leaseExpiresAt ?? '')
+        : latest?.status === 'failed'
+          ? Date.parse(latest.retryNotBefore ?? '')
+          : Number.NaN
+      if (!Number.isFinite(busyUntil) || busyUntil <= now) return 'claimable'
+
+      await delay(Math.min(recheckMs, Math.max(1, busyUntil - now)), signal)
+      recheckMs = Math.min(EXTERNAL_TRIGGER_RECHECK_MAX_MS, recheckMs * 2)
+    }
   }
 
   private async attachAdapter(adapter: AgentAdapter, signal?: AbortSignal): Promise<void> {
