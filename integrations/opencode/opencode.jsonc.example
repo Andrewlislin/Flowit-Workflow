@@ -7,7 +7,13 @@
         "command": [
           "node",
           "/ABSOLUTE/PATH/TO/Flowit-Workflow/dist/mcp-server.js"
-        ]
+        ],
+        "disabled": false,
+        "environment": {
+          "FLOWIT_WORKFLOW_ADAPTER": "opencode",
+          "FLOWIT_WORKFLOW_MUTATIONS": "1",
+          "FLOWIT_WORKFLOW_OPENCODE_URL": "http://127.0.0.1:4096"
+        }
       }
     }
   }
