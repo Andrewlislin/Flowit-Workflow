@@ -102,23 +102,45 @@ export class ClaudeEventCursor {
   async read(): Promise<number> {
     const current = await readCursor(this.filePath)
     if (current !== undefined) return current
-    if (this.legacyFilePath) {
-      const legacy = await readCursor(this.legacyFilePath)
-      if (legacy !== undefined) {
-        await this.write(legacy)
-        return legacy
-      }
-    }
-    return 0
+    if (!this.legacyFilePath || this.legacyFilePath === this.filePath) return 0
+
+    const baseline = await ensureMigrationBaseline(this.legacyFilePath)
+    return withGenerationFileLock(this.filePath, async () => {
+      const initialized = await readCursor(this.filePath)
+      if (initialized !== undefined) return initialized
+      await durableReplaceText(this.filePath, `${baseline}\n`)
+      return baseline
+    })
   }
   async write(offset: number): Promise<void> {
     if (!Number.isSafeInteger(offset) || offset < 0)
       throw new Error('Claude event cursor must be a non-negative integer')
-    await durableReplaceText(this.filePath, `${offset}\n`)
-    if (this.legacyFilePath && this.legacyFilePath !== this.filePath) {
-      await advanceSharedCursor(this.legacyFilePath, offset)
+    if (!this.legacyFilePath || this.legacyFilePath === this.filePath) {
+      await withGenerationFileLock(this.filePath, () =>
+        durableReplaceText(this.filePath, `${offset}\n`),
+      )
+      return
     }
+
+    await ensureMigrationBaseline(this.legacyFilePath)
+    await withGenerationFileLock(this.filePath, () =>
+      durableReplaceText(this.filePath, `${offset}\n`),
+    )
+    await advanceSharedCursor(this.legacyFilePath, offset)
   }
+}
+
+async function ensureMigrationBaseline(legacyFile: string): Promise<number> {
+  const migrationFile = `${legacyFile}.migration-baseline`
+  return withGenerationFileLock(migrationFile, async () => {
+    const current = await readCursor(migrationFile)
+    if (current !== undefined) return current
+    return withGenerationFileLock(legacyFile, async () => {
+      const baseline = (await readCursor(legacyFile)) ?? 0
+      await durableReplaceText(migrationFile, `${baseline}\n`)
+      return baseline
+    })
+  })
 }
 
 async function advanceSharedCursor(filePath: string, offset: number): Promise<void> {

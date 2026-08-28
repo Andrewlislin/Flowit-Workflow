@@ -30,6 +30,7 @@ class StartupAdapter implements AgentAdapter {
   constructor(
     id = 'startup',
     private readonly ignoreAbort = false,
+    private readonly disposalGate?: Promise<void>,
   ) {
     this.id = id
   }
@@ -74,6 +75,7 @@ class StartupAdapter implements AgentAdapter {
   }
   async dispose(): Promise<void> {
     this.disposals += 1
+    await this.disposalGate
   }
 }
 
@@ -84,6 +86,14 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 1_000): Promise<v
     await new Promise(resolve => setTimeout(resolve, 5))
   }
   throw new Error('condition timed out')
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined
+  const promise = new Promise<void>(resolve => {
+    resolvePromise = resolve
+  })
+  return { promise, resolve: () => resolvePromise?.() }
 }
 
 test('core.ready waits for adapter start before event subscriptions become active', async () => {
@@ -180,14 +190,59 @@ test('same-id adapter replacement fences an old generation even when its start i
   const second = new StartupAdapter('same')
   registry.register(second)
   second.succeed()
-  await registry.start(second)
-  assert.equal(second.starts, 1)
-  assert.equal(registry.require('same'), second)
+  const secondStart = registry.start(second)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(second.starts, 0)
 
   first.succeed()
-  await new Promise(resolve => setTimeout(resolve, 0))
+  await secondStart
+  assert.equal(second.starts, 1)
   assert.equal(registry.require('same'), second)
   await registry.dispose()
+})
+
+test('same-id replacement start waits for predecessor disposal', async () => {
+  const registry = new AgentAdapterRegistry()
+  const disposal = deferred()
+  const first = new StartupAdapter('serial-dispose', false, disposal.promise)
+  first.succeed()
+  const unregister = registry.register(first)
+  await registry.start(first)
+  unregister()
+  await waitUntil(() => first.disposals === 1)
+
+  const second = new StartupAdapter('serial-dispose')
+  second.succeed()
+  registry.register(second)
+  const secondStart = registry.start(second)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(second.starts, 0)
+
+  disposal.resolve()
+  await secondStart
+  assert.equal(second.starts, 1)
+  await registry.dispose()
+})
+
+test('registry shutdown waits for disposal started by an earlier unregister', async () => {
+  const registry = new AgentAdapterRegistry()
+  const disposal = deferred()
+  const adapter = new StartupAdapter('pending-dispose', false, disposal.promise)
+  adapter.succeed()
+  const unregister = registry.register(adapter)
+  await registry.start(adapter)
+  unregister()
+  await waitUntil(() => adapter.disposals === 1)
+
+  let settled = false
+  const shutdown = registry.dispose().then(() => {
+    settled = true
+  })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(settled, false)
+  disposal.resolve()
+  await shutdown
+  assert.equal(settled, true)
 })
 
 test('unregister disposes the removed adapter generation', async () => {

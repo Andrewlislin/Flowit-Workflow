@@ -22,28 +22,55 @@ test('workflow consumers use independent Claude and bridge cursors', () => {
   assert.notEqual(bridgeA.cursorFile, bridgeB.cursorFile)
 })
 
-test('new consumer cursors seed once from the legacy shared cursor and advance its high-water', async () => {
+test('staggered consumers seed from an immutable migration baseline while legacy high-water advances', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-cursor-seed-'))
   try {
-    const bridge = bridgeStatePaths('workbuddy', root, 'consumer-a')
-    await mkdir(path.dirname(bridge.legacyCursorFile), { recursive: true })
-    await writeFile(bridge.legacyCursorFile, '17\n', 'utf8')
-    assert.equal(await readBridgeCursor(bridge), 17)
-    await writeBridgeCursor(bridge, 31)
-    assert.equal((await readFile(bridge.legacyCursorFile, 'utf8')).trim(), '31')
-    await writeBridgeCursor(bridge, 22)
-    assert.equal((await readFile(bridge.legacyCursorFile, 'utf8')).trim(), '31')
+    const bridgeA = bridgeStatePaths('workbuddy', root, 'consumer-a')
+    const bridgeB = bridgeStatePaths('workbuddy', root, 'consumer-b')
+    const bridgeBaseline = `${bridgeA.legacyCursorFile}.migration-baseline`
+    await mkdir(path.dirname(bridgeA.legacyCursorFile), { recursive: true })
+    await writeFile(bridgeA.legacyCursorFile, '17\n', 'utf8')
+    assert.equal(await readBridgeCursor(bridgeA), 17)
+    await writeBridgeCursor(bridgeA, 31)
+    assert.equal((await readFile(bridgeA.legacyCursorFile, 'utf8')).trim(), '31')
+    assert.equal(await readBridgeCursor(bridgeB), 17)
+    assert.equal((await readFile(bridgeBaseline, 'utf8')).trim(), '17')
 
-    const claudePrimary = path.join(root, 'claude', 'cursors', 'a.cursor')
-    const claudeLegacy = path.join(root, 'claude', 'events.cursor')
+    const claudeRoot = path.join(root, 'claude')
+    const claudeLegacy = path.join(claudeRoot, 'events.cursor')
+    const claudeBaseline = `${claudeLegacy}.migration-baseline`
+    const claudeA = new ClaudeEventCursor(
+      path.join(claudeRoot, 'cursors', 'a.cursor'),
+      claudeLegacy,
+    )
+    const claudeB = new ClaudeEventCursor(
+      path.join(claudeRoot, 'cursors', 'b.cursor'),
+      claudeLegacy,
+    )
     await mkdir(path.dirname(claudeLegacy), { recursive: true })
     await writeFile(claudeLegacy, '23\n', 'utf8')
-    const claudeCursor = new ClaudeEventCursor(claudePrimary, claudeLegacy)
-    assert.equal(await claudeCursor.read(), 23)
-    await claudeCursor.write(41)
+    assert.equal(await claudeA.read(), 23)
+    await claudeA.write(41)
     assert.equal((await readFile(claudeLegacy, 'utf8')).trim(), '41')
-    await claudeCursor.write(29)
-    assert.equal((await readFile(claudeLegacy, 'utf8')).trim(), '41')
+    assert.equal(await claudeB.read(), 23)
+    assert.equal((await readFile(claudeBaseline, 'utf8')).trim(), '23')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('an absent legacy cursor still freezes a zero migration baseline before high-water advances', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-cursor-zero-'))
+  try {
+    const bridgeA = bridgeStatePaths('workbuddy', root, 'consumer-a')
+    const bridgeB = bridgeStatePaths('workbuddy', root, 'consumer-b')
+    assert.equal(await readBridgeCursor(bridgeA), 0)
+    await writeBridgeCursor(bridgeA, 9)
+    assert.equal(await readBridgeCursor(bridgeB), 0)
+    assert.equal(
+      (await readFile(`${bridgeA.legacyCursorFile}.migration-baseline`, 'utf8')).trim(),
+      '0',
+    )
   } finally {
     await rm(root, { recursive: true, force: true })
   }

@@ -6,11 +6,13 @@ interface AdapterLifecycle {
   controller: AbortController
   started: boolean
   starting?: Promise<void>
+  predecessorDisposal?: Promise<void>
 }
 
 export class AgentAdapterRegistry {
   private readonly adapters = new Map<AdapterId, AgentAdapter>()
   private readonly lifecycles = new Map<AgentAdapter, AdapterLifecycle>()
+  private readonly disposalFences = new Map<AdapterId, Promise<void>>()
   private readonly registeredListeners = new Set<(adapter: AgentAdapter) => void>()
   private readonly unregisteredListeners = new Set<(adapter: AgentAdapter) => void>()
 
@@ -18,8 +20,13 @@ export class AgentAdapterRegistry {
     if (!adapter.id.trim()) throw new Error('adapter id must be non-empty')
     if (this.adapters.has(adapter.id))
       throw new Error(`adapter ${adapter.id} is already registered`)
+    const predecessorDisposal = this.disposalFences.get(adapter.id)
     this.adapters.set(adapter.id, adapter)
-    this.lifecycles.set(adapter, { controller: new AbortController(), started: false })
+    this.lifecycles.set(adapter, {
+      controller: new AbortController(),
+      started: false,
+      ...(predecessorDisposal ? { predecessorDisposal } : {}),
+    })
     for (const listener of this.registeredListeners) listener(adapter)
     return () => {
       if (this.adapters.get(adapter.id) !== adapter) return
@@ -28,7 +35,7 @@ export class AgentAdapterRegistry {
       lifecycle?.controller.abort(new Error(`adapter ${adapter.id} was unregistered`))
       this.lifecycles.delete(adapter)
       for (const listener of this.unregisteredListeners) listener(adapter)
-      void settleDispose(adapter, ADAPTER_DISPOSE_TIMEOUT_MS)
+      this.beginDisposal(adapter, lifecycle?.starting)
     }
   }
 
@@ -65,6 +72,17 @@ export class AgentAdapterRegistry {
     const waitSignal = signal
       ? AbortSignal.any([lifecycle.controller.signal, signal])
       : lifecycle.controller.signal
+
+    const predecessorDisposal = lifecycle.predecessorDisposal
+    if (predecessorDisposal) {
+      await waitForPromise(predecessorDisposal, waitSignal)
+      waitSignal.throwIfAborted()
+      if (this.adapters.get(adapter.id) !== adapter)
+        throw new Error(`agent adapter ${adapter.id} changed while awaiting predecessor disposal`)
+      if (lifecycle.predecessorDisposal === predecessorDisposal)
+        delete lifecycle.predecessorDisposal
+    }
+
     if (lifecycle.starting) return waitForPromise(lifecycle.starting, waitSignal)
 
     const startup = (async () => {
@@ -94,30 +112,98 @@ export class AgentAdapterRegistry {
   }
 
   async dispose(): Promise<void> {
-    const adapters = this.list()
-    for (const adapter of adapters)
+    const generations = this.list().map(adapter => ({
+      adapter,
+      startup: this.lifecycles.get(adapter)?.starting,
+    }))
+    for (const { adapter } of generations)
       this.lifecycles.get(adapter)?.controller.abort(new Error('adapter registry disposed'))
     this.adapters.clear()
     this.lifecycles.clear()
     this.registeredListeners.clear()
     this.unregisteredListeners.clear()
-    await Promise.all(adapters.map(adapter => settleDispose(adapter, ADAPTER_DISPOSE_TIMEOUT_MS)))
+    const activeDisposals = generations.map(({ adapter, startup }) =>
+      this.beginDisposal(adapter, startup),
+    )
+    const pending = new Set([...this.disposalFences.values(), ...activeDisposals])
+    await Promise.allSettled([...pending])
+  }
+
+  private beginDisposal(adapter: AgentAdapter, startup?: Promise<void>): Promise<void> {
+    const predecessor = this.disposalFences.get(adapter.id)
+    const ownDisposal = disposeAdapter(adapter, ADAPTER_DISPOSE_TIMEOUT_MS)
+    const startupSettlement = startup
+      ? settleStartup(adapter.id, startup, ADAPTER_DISPOSE_TIMEOUT_MS)
+      : Promise.resolve()
+    const disposal = (async () => {
+      const outcomes = await Promise.allSettled([
+        ...(predecessor ? [predecessor] : []),
+        startupSettlement,
+        ownDisposal,
+      ])
+      const errors = outcomes.flatMap(outcome =>
+        outcome.status === 'rejected' ? [outcome.reason] : [],
+      )
+      if (errors.length === 1) throw errors[0]
+      if (errors.length > 1) {
+        throw new AggregateError(
+          errors,
+          `adapter ${adapter.id} disposal fence failed across generations`,
+        )
+      }
+    })()
+    this.disposalFences.set(adapter.id, disposal)
+    void disposal.then(
+      () => {
+        if (this.disposalFences.get(adapter.id) === disposal)
+          this.disposalFences.delete(adapter.id)
+      },
+      () => undefined,
+    )
+    return disposal
   }
 }
 
-async function settleDispose(adapter: AgentAdapter, timeoutMs: number): Promise<void> {
+async function disposeAdapter(adapter: AgentAdapter, timeoutMs: number): Promise<void> {
+  await raceWithTimeout(
+    Promise.resolve().then(() => adapter.dispose?.()),
+    timeoutMs,
+    `adapter ${adapter.id} disposal timed out after ${timeoutMs}ms`,
+  )
+}
+
+async function settleStartup(
+  adapterId: AdapterId,
+  startup: Promise<void>,
+  timeoutMs: number,
+): Promise<void> {
+  await raceWithTimeout(
+    startup.then(
+      () => undefined,
+      () => undefined,
+    ),
+    timeoutMs,
+    `adapter ${adapterId} startup did not settle during disposal after ${timeoutMs}ms`,
+  )
+}
+
+async function raceWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await Promise.race([
-      Promise.resolve(adapter.dispose?.()).then(
-        () => undefined,
-        () => undefined,
-      ),
-      new Promise<void>(resolve => {
-        const timer = setTimeout(resolve, timeoutMs)
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs)
         timer.unref?.()
       }),
     ])
-  } catch {}
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 async function waitForPromise<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
