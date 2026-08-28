@@ -191,6 +191,38 @@ Flowit does not silently start an unmanaged OpenCode process. `doctor opencode` 
 
 `flowit-workflow uninstall opencode` removes only the installer-owned `mcp.servers.flowit-workflow` entry. The config file itself is always retained, including when Flowit created it originally, so any bytes/comments added after setup can never be lost by uninstall. The separate ownership manifest is removed after safe cleanup.
 
+## DeepSeek Harness provider
+
+DeepSeek Harness uses the native Cordis plugin/patch model instead of MCP:
+
+```bash
+flowit-workflow setup dsh --dry-run
+flowit-workflow setup dsh
+flowit-workflow setup dsh --yes --json
+flowit-workflow doctor dsh
+flowit-workflow repair dsh --dry-run
+```
+
+For user scope, Flowit edits the persistent Harness home patch layer at `${DSH_HOME:-~/.dsh}/cordis.patch.yml`. The installer appends one marker-bounded `- insert:` row that loads the built `dist/dsh/plugin.js` and supplies a dedicated durable storage path. Applying setup also explicitly enables `allowModelMutations: true`; this is allowed only because every setup mutation is confirmation-gated by the shared CLI.
+
+The provider never rewrites the rest of the YAML patch. Existing Flowit markers, an unmanaged `id: flowit-workflow`/Flowit plugin row, a non-sequence patch shape, or a user-modified owned block all fail closed instead of being adopted.
+
+A separate ownership manifest records the exact managed block hash, patch path, scope, storage path, and whether the patch existed before setup. Planning snapshots the full patch file so unrelated edits between `--dry-run` and apply are rejected as stale.
+
+### DSH project scope
+
+Current Harness composition has persistent profile/home patch layers and runtime `--patch` overlays, but no project-local persistent layer. Therefore project scope writes `<project>/.flowit-workflow/dsh/cordis.patch.yml` and returns `manual-action-required` with commands such as:
+
+```bash
+dsh web --patch <project>/.flowit-workflow/dsh/cordis.patch.yml
+```
+
+The same overlay can be supplied to a headless profile. User scope does not require `--patch`; it becomes active when Harness restarts and recomposes `$DSH_HOME/cordis.patch.yml`.
+
+### DSH uninstall semantics
+
+`flowit-workflow uninstall dsh` removes only the marker-bounded native plugin block when its hash still matches the ownership manifest. Other Harness patch entries and the patch file itself are retained. Flowit workflow state is deliberately retained to avoid deleting durable orchestration history.
+
 ## Current rollout state
 
 The known catalog includes:
@@ -199,7 +231,7 @@ The known catalog includes:
 - Claude Code — provider implemented;
 - Codex — provider implemented;
 - OpenCode — provider implemented;
-- DeepSeek Harness — provider pending;
+- DeepSeek Harness — provider implemented;
 - 豆包办公 — provider pending.
 
-The remaining providers can land independently on the same framework without changing the CLI contract.
+The remaining provider can land independently on the same framework without changing the CLI contract.
