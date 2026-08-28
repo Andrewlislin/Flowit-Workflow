@@ -1,3 +1,4 @@
+import { WorkBuddySetupProvider } from './providers/workbuddy.js'
 import type { HostDetection, HostSetupContext, HostSetupProvider, SetupHostId } from './types.js'
 
 export class HostSetupRegistry {
@@ -53,5 +54,5 @@ export class HostSetupRegistry {
 export function createDefaultHostSetupRegistry(
   providers: readonly HostSetupProvider[] = [],
 ): HostSetupRegistry {
-  return new HostSetupRegistry(providers)
+  return new HostSetupRegistry([new WorkBuddySetupProvider(), ...providers])
 }
