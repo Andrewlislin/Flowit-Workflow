@@ -9,11 +9,13 @@ import { startLeaseHeartbeat } from './lease.js'
 
 const DEFAULT_RECONCILE_MS = 1_000
 const DISPOSE_QUEUE_GRACE_MS = 3_000
+const EXTERNAL_TRIGGER_RECHECK_MS = 50
 export interface PipelineRuntimeOptions { workerId: string; leaseDurationMs: number; retryDelayMs: number; maxAttempts: number }
+type PipelineExecutionOutcome = 'completed' | 'dead_letter' | 'busy'
 
 export class PipelineRuntime {
   private readonly queues = new Map<string, Promise<void>>()
-  private readonly queuedTriggers = new Map<string, Promise<void>>()
+  private readonly queuedTriggers = new Map<string, Promise<PipelineExecutionOutcome>>()
   private readonly eventStops = new Map<string, { adapter: AgentAdapter; stop: () => void }>()
   private readonly disposeController = new AbortController()
   private definitionMutationTail: Promise<void> = Promise.resolve()
@@ -36,7 +38,19 @@ export class PipelineRuntime {
 
   create(input: CreatePipelineInput): Promise<PipelineDefinition> { return this.serializeDefinitionMutation(async () => { const pipeline = normalizePipeline(randomUUID(), input, new Date(), this.defaultAdapterId); return this.store.transact(state => { assertNoAutonomousSessionCycle([...state.pipelines, pipeline], this.defaultAdapterId); state.pipelines.push(pipeline); return pipeline }) }) }
   async list(): Promise<PipelineDefinition[]> { return (await this.store.snapshot()).pipelines }
-  async run(id: string): Promise<void> { const pipeline = (await this.store.snapshot()).pipelines.find(candidate => candidate.id === id); if (!pipeline) throw new Error(`unknown pipeline ${id}`); if (pipeline.status !== 'active') throw new Error(`pipeline ${id} is ${pipeline.status}`); await this.enqueue(pipeline, `manual:${randomUUID()}`) }
+  async run(id: string): Promise<void> { const pipeline = await this.requireActive(id); await this.enqueue(pipeline, `manual:${randomUUID()}`) }
+  async runWithTrigger(id: string, triggerKey: string, signal?: AbortSignal): Promise<void> {
+    const normalized = triggerKey.trim()
+    if (!normalized || normalized.startsWith('manual:')) throw new Error('external pipeline triggerKey must be stable and must not use the manual: namespace')
+    for (;;) {
+      signal?.throwIfAborted()
+      const pipeline = await this.requireActive(id)
+      const outcome = await this.enqueue(pipeline, normalized, signal)
+      if (outcome === 'completed') return
+      if (outcome === 'dead_letter') throw new Error(`pipeline ${id} trigger ${normalized} is dead-lettered`)
+      await delay(EXTERNAL_TRIGGER_RECHECK_MS, signal)
+    }
+  }
   setStatus(id: string, status: 'active' | 'paused'): Promise<PipelineDefinition> { return this.serializeDefinitionMutation(async () => this.store.transact(state => { const index = state.pipelines.findIndex(candidate => candidate.id === id); if (index < 0) throw new Error(`unknown pipeline ${id}`); const current = state.pipelines[index]!; const updated: PipelineDefinition = { ...current, status, updatedAt: new Date().toISOString() }; if (status === 'active') { const candidates = state.pipelines.map((candidate, candidateIndex) => candidateIndex === index ? updated : candidate); assertNoAutonomousSessionCycle(candidates, this.defaultAdapterId) } state.pipelines[index] = updated; return updated })) }
 
   async dispose(): Promise<void> {
@@ -51,6 +65,13 @@ export class PipelineRuntime {
     this.eventStops.clear()
     const pending = [...new Set([...this.queues.values(), ...this.queuedTriggers.values()])]
     await settleAllWithin(pending, DISPOSE_QUEUE_GRACE_MS)
+  }
+
+  private async requireActive(id: string): Promise<PipelineDefinition> {
+    const pipeline = (await this.store.snapshot()).pipelines.find(candidate => candidate.id === id)
+    if (!pipeline) throw new Error(`unknown pipeline ${id}`)
+    if (pipeline.status !== 'active') throw new Error(`pipeline ${id} is ${pipeline.status}`)
+    return pipeline
   }
 
   private async attachAdapter(adapter: AgentAdapter, signal?: AbortSignal): Promise<void> {
@@ -108,16 +129,16 @@ export class PipelineRuntime {
     }
   }
 
-  private enqueueAdmission(pipeline: PipelineDefinition, admission: PipelineEventAdmission): Promise<void> { return this.enqueue(pipeline, admission.triggerKey) }
+  private enqueueAdmission(pipeline: PipelineDefinition, admission: PipelineEventAdmission): Promise<PipelineExecutionOutcome> { return this.enqueue(pipeline, admission.triggerKey) }
   private async serializeDefinitionMutation<T>(operation: () => Promise<T>): Promise<T> { const current = this.definitionMutationTail.then(operation, operation); this.definitionMutationTail = current.then(() => undefined, () => undefined); return current }
 
-  private enqueue(pipeline: PipelineDefinition, triggerKey: string): Promise<void> {
-    if (this.disposed) return Promise.resolve()
+  private enqueue(pipeline: PipelineDefinition, triggerKey: string, externalSignal?: AbortSignal): Promise<PipelineExecutionOutcome> {
+    if (this.disposed) return Promise.resolve('busy')
     const triggerIdentity = `${pipeline.id}\u0000${triggerKey}`
     const existing = this.queuedTriggers.get(triggerIdentity)
     if (existing) return existing
     const previous = this.queues.get(pipeline.id) ?? Promise.resolve()
-    const next = previous.then(() => this.execute(pipeline, triggerKey), () => this.execute(pipeline, triggerKey))
+    const next = previous.then(() => this.execute(pipeline, triggerKey, externalSignal), () => this.execute(pipeline, triggerKey, externalSignal))
     const tail = next.then(() => undefined, () => undefined)
     this.queues.set(pipeline.id, tail)
     this.queuedTriggers.set(triggerIdentity, next)
@@ -128,17 +149,21 @@ export class PipelineRuntime {
     return next
   }
 
-  private async execute(pipeline: PipelineDefinition, triggerKey: string): Promise<void> {
-    if (this.disposed) return
-    const current = (await this.store.snapshot()).pipelines.find(candidate => candidate.id === pipeline.id); if (!current || current.status !== 'active' || this.disposed) return; pipeline = current
+  private async execute(pipeline: PipelineDefinition, triggerKey: string, externalSignal?: AbortSignal): Promise<PipelineExecutionOutcome> {
+    if (this.disposed) return 'busy'
+    const current = (await this.store.snapshot()).pipelines.find(candidate => candidate.id === pipeline.id); if (!current || current.status !== 'active' || this.disposed) return 'busy'; pipeline = current
     const manual = triggerKey.startsWith('manual:')
     const claim = manual
       ? await this.store.claimRun({ kind: 'pipeline', definitionId: pipeline.id, triggerKey, owner: this.options.workerId, leaseDurationMs: this.options.leaseDurationMs, maxAttempts: this.options.maxAttempts, permanentDedupe: false })
       : await this.store.claimPipelineTrigger({ pipelineId: pipeline.id, triggerKey, owner: this.options.workerId, leaseDurationMs: this.options.leaseDurationMs, maxAttempts: this.options.maxAttempts })
-    if (claim.kind !== 'claimed') return
+    if (claim.kind === 'completed') return 'completed'
+    if (claim.kind === 'dead_letter') return 'dead_letter'
+    if (claim.kind === 'busy') return 'busy'
     let running = claim.run
     const heartbeat = startLeaseHeartbeat(this.store, running.id, this.options.workerId, this.options.leaseDurationMs, { kind: 'pipeline', definitionId: pipeline.id })
-    const signal = AbortSignal.any([heartbeat.signal, this.disposeController.signal])
+    const signals = [heartbeat.signal, this.disposeController.signal]
+    if (externalSignal) signals.push(externalSignal)
+    const signal = AbortSignal.any(signals)
     try {
       signal.throwIfAborted()
       const order = topologicalOrder(pipeline.nodes, pipeline.edges); const nodes = new Map(pipeline.nodes.map(node => [node.id, node])); const completedNodes = new Set((running.nodeResults ?? []).map(result => result.nodeId))
@@ -152,6 +177,7 @@ export class PipelineRuntime {
         running = await this.store.checkpointRun(running.id, this.options.workerId, checkpoint, this.options.leaseDurationMs)
       }
       await this.store.completeRun(running.id, this.options.workerId)
+      return 'completed'
     } catch (error: unknown) { const message = error instanceof Error ? error.message : String(error); try { await this.store.failRun(running.id, this.options.workerId, message, { retryDelayMs: this.options.retryDelayMs, deadLetter: running.attempt >= this.options.maxAttempts }) } catch {} throw error }
     finally { heartbeat.stop() }
   }
@@ -163,4 +189,14 @@ async function settleAllWithin(promises: Promise<unknown>[], timeoutMs: number):
     Promise.allSettled(promises).then(() => undefined),
     new Promise<void>(resolve => { const timer = setTimeout(resolve, timeoutMs); timer.unref?.() }),
   ])
+}
+
+async function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    const abort = (): void => { clearTimeout(timer); reject(signal?.reason instanceof Error ? signal.reason : new Error('aborted')) }
+    signal?.addEventListener('abort', abort, { once: true })
+    timer.unref?.()
+  })
 }
