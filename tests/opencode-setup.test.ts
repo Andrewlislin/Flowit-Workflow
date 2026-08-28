@@ -260,15 +260,21 @@ test('OpenCode uninstall preserves unrelated JSONC content and removes only its 
   }
 })
 
-test('OpenCode uninstall removes a config file created solely by setup', async () => {
+test('OpenCode uninstall retains a config file created by setup after removing its MCP entry', async () => {
   const f = await fixture()
   const paths = await openCodeSetupPaths(f.context, userOptions(f.project))
   try {
     const setup = await f.provider.planSetup(f.context, userOptions(f.project))
     await f.provider.applySetup(f.context, setup, userApply(f.project))
+    const installed = await readFile(paths.configFile, 'utf8')
+    await writeFile(paths.configFile, `${installed.trimEnd()}\n// user note added after setup\n`, 'utf8')
+
     const uninstall = await f.provider.planUninstall(f.context, userOptions(f.project))
     await f.provider.applyUninstall(f.context, uninstall, userApply(f.project))
-    assert.equal(await exists(paths.configFile), false)
+    assert.equal(await exists(paths.configFile), true)
+    const remaining = await readFile(paths.configFile, 'utf8')
+    assert.match(remaining, /user note added after setup/)
+    assert.equal(jsoncPropertyValue(parseJsoncDocument(remaining), OPENCODE_MCP_PATH), undefined)
   } finally {
     await rm(f.root, { recursive: true, force: true })
   }
