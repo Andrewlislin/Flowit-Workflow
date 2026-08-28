@@ -23,7 +23,6 @@ export const CLAUDE_CODE_MANAGED_FILES = [
   'hooks/hooks.json',
   '.mcp.json',
 ] as const
-
 export type ClaudeCodeManagedFile = (typeof CLAUDE_CODE_MANAGED_FILES)[number]
 
 export interface ClaudeCodeSetupPaths {
@@ -90,29 +89,25 @@ export async function inspectClaudeCodeState(
 
   const [manifest, desired, pluginRootExists, stateRootExists, claudeExecutable] = await Promise.all([
     readClaudeSetupManifest(paths.setupManifestFile),
-    desiredClaudePluginFiles(context, options, paths),
+    desiredClaudePluginFiles(paths),
     pathExists(paths.pluginRoot),
     pathExists(paths.stateRoot),
     findClaudeExecutable(context),
   ])
-
-  const files = await Promise.all(
-    CLAUDE_CODE_MANAGED_FILES.map(async relativePath => {
-      const file = path.join(paths.pluginRoot, ...relativePath.split('/'))
-      const current = await readTextSnapshot(file)
-      const desiredContent = desired[relativePath]
-      return {
-        relativePath,
-        file,
-        current,
-        desiredContent,
-        desiredHash: digest(desiredContent),
-        ...(manifest?.ownedFiles[relativePath]
-          ? { ownedHash: manifest.ownedFiles[relativePath] }
-          : {}),
-      } satisfies ClaudeCodeManagedFileState
-    }),
-  )
+  const files = await Promise.all(CLAUDE_CODE_MANAGED_FILES.map(async relativePath => {
+    const file = path.join(paths.pluginRoot, ...relativePath.split('/'))
+    const current = await readTextSnapshot(file)
+    const desiredContent = desired[relativePath]
+    const ownedHash = manifest?.ownedFiles[relativePath]
+    return {
+      relativePath,
+      file,
+      current,
+      desiredContent,
+      desiredHash: digest(desiredContent),
+      ...(ownedHash ? { ownedHash } : {}),
+    } satisfies ClaudeCodeManagedFileState
+  }))
 
   const provisional: ClaudeCodeState = {
     paths,
@@ -170,22 +165,20 @@ export function claudeCodeDoctorChecks(
   options: SetupRequestOptions,
   state: ClaudeCodeState,
 ): DoctorCheck[] {
-  const checks: DoctorCheck[] = []
-  checks.push(state.claudeExecutable
-    ? { id: 'claude-executable', status: 'ok', summary: `Claude Code executable detected at ${state.claudeExecutable}` }
-    : { id: 'claude-executable', status: 'warning', summary: 'Claude Code executable was not found on PATH', repairable: false })
-
-  if (state.conflicts.length > 0) {
-    checks.push({
-      id: 'claude-ownership',
-      status: 'error',
-      summary: 'Claude Code plugin ownership/configuration conflict detected',
-      detail: state.conflicts.join(' '),
-      repairable: false,
-    })
-  } else {
-    checks.push({ id: 'claude-ownership', status: 'ok', summary: 'Claude Code plugin ownership is consistent' })
-  }
+  const checks: DoctorCheck[] = [
+    state.claudeExecutable
+      ? { id: 'claude-executable', status: 'ok', summary: `Claude Code executable detected at ${state.claudeExecutable}` }
+      : { id: 'claude-executable', status: 'warning', summary: 'Claude Code executable was not found on PATH', repairable: false },
+  ]
+  checks.push(state.conflicts.length
+    ? {
+        id: 'claude-ownership',
+        status: 'error',
+        summary: 'Claude Code plugin ownership/configuration conflict detected',
+        detail: state.conflicts.join(' '),
+        repairable: false,
+      }
+    : { id: 'claude-ownership', status: 'ok', summary: 'Claude Code plugin ownership is consistent' })
 
   for (const file of state.files) {
     checks.push(file.current.hash === file.desiredHash
@@ -217,8 +210,9 @@ export function desiredOwnedFilesAfterPlan(
 ): Record<string, string> {
   const owned: Record<string, string> = { ...(state.manifest?.ownedFiles ?? {}) }
   for (const file of state.files) {
-    if (actionIds.has(actionIdFor(file.relativePath))) owned[file.relativePath] = file.desiredHash
-    else if (file.ownedHash) owned[file.relativePath] = file.desiredHash
+    if (actionIds.has(actionIdFor(file.relativePath)) || file.ownedHash) {
+      owned[file.relativePath] = file.desiredHash
+    }
   }
   return owned
 }
@@ -242,21 +236,19 @@ function claudeCodeConflicts(
     )
     return conflicts
   }
-  if (state.manifest) {
-    if (state.manifest.hostId !== CLAUDE_CODE_SETUP_HOST_ID
-      || state.manifest.scope !== options.scope
-      || state.manifest.pluginRoot !== state.paths.pluginRoot) {
-      conflicts.push('The Claude Code setup ownership manifest does not match the requested scope/plugin root.')
-      return conflicts
-    }
+  if (state.manifest && (
+    state.manifest.hostId !== CLAUDE_CODE_SETUP_HOST_ID
+    || state.manifest.scope !== options.scope
+    || state.manifest.pluginRoot !== state.paths.pluginRoot
+  )) {
+    conflicts.push('The Claude Code setup ownership manifest does not match the requested scope/plugin root.')
+    return conflicts
   }
   for (const file of state.files) {
     if (!file.current.exists) continue
     if (!file.ownedHash) {
       conflicts.push(`Managed Claude plugin file ${file.file} exists but is not recorded as installer-owned.`)
-      continue
-    }
-    if (file.current.hash !== file.ownedHash) {
+    } else if (file.current.hash !== file.ownedHash) {
       conflicts.push(`Installer-owned Claude plugin file ${file.file} was modified after setup.`)
     }
   }
@@ -264,8 +256,6 @@ function claudeCodeConflicts(
 }
 
 async function desiredClaudePluginFiles(
-  context: HostSetupContext,
-  options: SetupRequestOptions,
   paths: ClaudeCodeSetupPaths,
 ): Promise<Record<ClaudeCodeManagedFile, string>> {
   const [packageRaw, pluginRaw, runBound, orchestrate] = await Promise.all([
@@ -279,11 +269,7 @@ async function desiredClaudePluginFiles(
   const version = packageManifest.version
   if (typeof version !== 'string' || !version.trim()) throw new Error('Flowit package version is missing')
 
-  const pluginManifest = {
-    ...sourcePlugin,
-    name: CLAUDE_CODE_PLUGIN_NAME,
-    version,
-  }
+  const pluginManifest = { ...sourcePlugin, name: CLAUDE_CODE_PLUGIN_NAME, version }
   const mcp = {
     mcpServers: {
       orchestration: {
@@ -310,10 +296,6 @@ async function desiredClaudePluginFiles(
       SubagentStop: [hookEntry],
       SessionEnd: [hookEntry],
     },
-  }
-  if (options.scope === 'project' && !path.resolve(context.packageRoot).startsWith(`${path.resolve(options.projectDir)}${path.sep}`)) {
-    // Project plugin content is still usable on this machine, but it is not portable to teammates
-    // until Flowit is installed inside the project or distributed through a Claude marketplace/npm source.
   }
   return {
     '.claude-plugin/plugin.json': `${JSON.stringify(pluginManifest, null, 2)}\n`,
@@ -357,7 +339,7 @@ function parseJsonObject(raw: string, file: string): Record<string, unknown> {
 
 async function findClaudeExecutable(context: HostSetupContext): Promise<string | undefined> {
   const explicit = context.env.FLOWIT_WORKFLOW_CLAUDE_BIN?.trim()
-  if (explicit) return executableExists(explicit) ? path.resolve(explicit) : undefined
+  if (explicit) return await executableExists(explicit) ? path.resolve(explicit) : undefined
   const pathValue = context.env.PATH ?? context.env.Path ?? context.env.path
   if (!pathValue) return undefined
   const extensions = context.platform === 'win32' ? ['', '.exe', '.cmd', '.bat'] : ['']
