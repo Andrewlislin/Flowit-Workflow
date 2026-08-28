@@ -1,4 +1,4 @@
-import { mkdir, rm } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import path from 'node:path'
 import type {
   DoctorReport,
@@ -399,7 +399,7 @@ function manifestAction(state: ClaudeCodeState, seed: boolean): SetupPlan['actio
 }
 
 function preflightOwnership(plan: SetupPlan, state: ClaudeCodeState): void {
-  if (state.conflicts.length > 0 && plan.actions.length > 0) {
+  if (plan.operation !== 'uninstall' && state.conflicts.length > 0 && plan.actions.length > 0) {
     throw new Error('Claude Code plugin ownership changed after planning; refusing to modify it')
   }
   for (const row of plan.actions) {
