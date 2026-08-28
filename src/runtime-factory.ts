@@ -116,6 +116,7 @@ export function createBuiltInAdapter(id: BuiltInAdapterId, consumerId?: string):
   switch (id) {
     case CLAUDE_CODE_ADAPTER_ID:
       return new ClaudeCodeAgentAdapter({
+        executable: process.env.FLOWIT_WORKFLOW_CLAUDE_BIN ?? 'claude',
         ...(consumerId ? { consumerId } : {}),
         ...(process.env.FLOWIT_WORKFLOW_PLUGIN_ROOT
           ? { pluginDir: process.env.FLOWIT_WORKFLOW_PLUGIN_ROOT }
