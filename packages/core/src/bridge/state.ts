@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import type { AgentEvent, AgentSessionDescriptor } from '../core/types.js'
 import {
@@ -32,8 +33,7 @@ export function bridgeStatePaths(
   root?: string,
   consumerId?: string,
 ): BridgeStatePaths {
-  const base =
-    root ?? path.join(process.env.HOME ?? process.cwd(), '.flowit-workflow', 'bridges', adapterId)
+  const base = root ?? path.join(os.homedir(), '.flowit-workflow', 'bridges', adapterId)
   const legacyCursorFile = path.join(base, 'events.cursor')
   const cursorFile = consumerId?.trim()
     ? path.join(base, 'cursors', `${createHash('sha256').update(consumerId).digest('hex')}.cursor`)
