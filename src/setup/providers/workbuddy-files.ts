@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, rm, rmdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 export type JsonRecord = Record<string, unknown>
@@ -100,7 +100,7 @@ export async function removeEmptyParents(start: string, stopAt: string): Promise
   while (current.startsWith(stopAt) && current !== stopAt) {
     await pruneEmptyDescendants(current)
     try {
-      await rm(current)
+      await rmdir(current)
     } catch {
       return
     }
@@ -159,7 +159,7 @@ async function pruneEmptyDescendants(directory: string): Promise<void> {
     if (!entry.isDirectory()) continue
     const child = path.join(directory, entry.name)
     await pruneEmptyDescendants(child)
-    await rm(child).catch(() => undefined)
+    await rmdir(child).catch(() => undefined)
   }
 }
 
