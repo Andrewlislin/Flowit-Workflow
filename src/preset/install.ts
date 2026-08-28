@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { FlowitOrchestrationCore } from '../core/runtime.js'
@@ -62,20 +63,22 @@ export async function preparePresetInstall(
     runtime,
   )
 
+  const common = {
+    kind: 'preset-install-plan' as const,
+    preset: descriptor(preset),
+    pipelineName,
+    storageFile: storage.storageFile,
+    legacyStorageFiles: storage.legacyStorageFiles,
+    instanceId: storage.instanceId,
+    workspace,
+    ...(defaultAdapterId ? { defaultAdapterId } : {}),
+    bindings: Object.values(bindings),
+    missingRoles,
+    warnings,
+  }
+
   if (missingRoles.length > 0 || (preset.inputRequired && !options.input?.trim()) || warnings.some(row => /cannot share a runnable/.test(row))) {
-    return {
-      kind: 'preset-install-plan',
-      preset: descriptor(preset),
-      pipelineName,
-      storageFile: storage.storageFile,
-      instanceId: storage.instanceId,
-      workspace,
-      ...(defaultAdapterId ? { defaultAdapterId } : {}),
-      bindings: Object.values(bindings),
-      missingRoles,
-      action: 'incomplete',
-      warnings,
-    }
+    return { ...common, action: 'incomplete' }
   }
 
   if (!defaultAdapterId) throw new Error('preset install requires --adapter or per-role adapter bindings')
@@ -87,19 +90,12 @@ export async function preparePresetInstall(
   })
   const existing = await inspectExistingPipeline(storage, defaultAdapterId, pipeline)
   return {
-    kind: 'preset-install-plan',
-    preset: descriptor(preset),
-    pipelineName,
-    storageFile: storage.storageFile,
-    instanceId: storage.instanceId,
-    workspace,
+    ...common,
     defaultAdapterId,
-    bindings: Object.values(bindings),
     missingRoles: [],
     action: existing ? 'reuse' : 'create',
     ...(existing ? { existingPipelineId: existing.id } : {}),
     pipeline,
-    warnings,
   }
 }
 
@@ -107,10 +103,10 @@ export async function applyPresetInstall(plan: PreparedPresetInstall): Promise<A
   if (plan.action === 'incomplete' || !plan.pipeline || !plan.defaultAdapterId) {
     throw new Error(`preset ${plan.preset.id} install plan is incomplete; review missing roles/input before applying`)
   }
-  const storage = { storageFile: plan.storageFile, legacyStorageFiles: [] as string[], instanceId: plan.instanceId }
+  await mkdir(plan.workspace, { recursive: true })
   const core = new FlowitOrchestrationCore({
-    storageFile: storage.storageFile,
-    legacyStorageFiles: storage.legacyStorageFiles,
+    storageFile: plan.storageFile,
+    legacyStorageFiles: [...plan.legacyStorageFiles],
     defaultAdapterId: plan.defaultAdapterId,
     activeWorkers: false,
   })
@@ -123,9 +119,7 @@ export async function applyPresetInstall(plan: PreparedPresetInstall): Promise<A
         `pipeline name ${JSON.stringify(plan.pipelineName)} is already used by a different or ambiguous definition; choose --name to avoid replacing user work`,
       )
     }
-    if (exact.length === 1) {
-      return result(plan, 'reused', exact[0]!.id)
-    }
+    if (exact.length === 1) return result(plan, 'reused', exact[0]!.id)
     const created = await core.pipelines.create(plan.pipeline)
     return result(plan, 'created', created.id)
   } finally {
@@ -154,7 +148,7 @@ function resolveBindings(
     }
   }
   for (const roleId of Object.keys(options.sessions ?? {})) {
-    if (roleId !== 'all' && !roleIds.includes(roleId)) throw new Error(`unknown preset role in --session: ${roleId}`)
+    if (!roleIds.includes(roleId)) throw new Error(`unknown preset role in --session: ${roleId}`)
   }
   for (const roleId of Object.keys(options.roleAdapters ?? {})) {
     if (!roleIds.includes(roleId)) throw new Error(`unknown preset role in --role-adapter: ${roleId}`)
@@ -173,7 +167,11 @@ function resolvePresetStorage(
 ): { storageFile: string; legacyStorageFiles: string[]; instanceId: string } {
   const instanceId = normalizeInstanceId(options.instanceId ?? runtime.env?.FLOWIT_WORKFLOW_INSTANCE_ID ?? 'default')
   if (options.storageFile?.trim()) {
-    return { storageFile: path.resolve(runtime.cwd ?? process.cwd(), options.storageFile), legacyStorageFiles: [], instanceId }
+    return {
+      storageFile: path.resolve(runtime.cwd ?? process.cwd(), options.storageFile),
+      legacyStorageFiles: [],
+      instanceId,
+    }
   }
   if (adapters.length > 0 && adapters.every(adapter => adapter === 'dsh')) {
     return {
@@ -183,22 +181,14 @@ function resolvePresetStorage(
     }
   }
   if (defaultAdapterId && isBuiltInAdapterId(defaultAdapterId)) {
-    const resolved = resolveConfiguredRuntime({
-      defaultAdapterId,
-      activeWorkers: false,
-      instanceId,
-    })
+    const resolved = resolveConfiguredRuntime({ defaultAdapterId, activeWorkers: false, instanceId })
     return {
       storageFile: resolved.storageFile,
       legacyStorageFiles: resolved.legacyStorageFiles,
       instanceId: resolved.instanceId,
     }
   }
-  return {
-    storageFile: defaultStoragePath(instanceId),
-    legacyStorageFiles: [],
-    instanceId,
-  }
+  return { storageFile: defaultStoragePath(instanceId), legacyStorageFiles: [], instanceId }
 }
 
 async function inspectExistingPipeline(
