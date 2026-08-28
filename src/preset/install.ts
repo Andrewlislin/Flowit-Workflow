@@ -69,7 +69,7 @@ export async function preparePresetInstall(
     boundAdapters,
     runtime,
   )
-  const requestedSchedule = resolveRequestedSchedule(options)
+  const requestedSchedule = resolveRequestedSchedule(options, pipelineName)
 
   const common = {
     kind: 'preset-install-plan' as const,
@@ -163,9 +163,12 @@ export async function applyPresetInstall(plan: PreparedPresetInstall): Promise<A
   }
 }
 
-function resolveRequestedSchedule(options: PresetInstallOptions): Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'> {
+function resolveRequestedSchedule(
+  options: PresetInstallOptions,
+  pipelineName: string,
+): Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'> {
   const mode = options.scheduleMode ?? 'manual'
-  const scheduleName = options.scheduleName?.trim() || `${options.pipelineName?.trim() || 'Flowit preset'} schedule`
+  const scheduleName = options.scheduleName?.trim() || `${pipelineName} schedule`
   if (mode === 'manual') return { mode, scheduleName }
   if (mode === 'every') {
     if (!Number.isSafeInteger(options.everySeconds) || (options.everySeconds ?? 0) < 60) {
