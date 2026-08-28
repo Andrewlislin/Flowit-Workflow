@@ -1,4 +1,4 @@
-import type { CreatePipelineInput } from '../core/types.js'
+import type { CreatePipelineInput, ScheduleTiming } from '../core/types.js'
 
 export interface PresetRoleDescriptor {
   readonly id: string
@@ -34,6 +34,15 @@ export interface PresetDefinition extends PresetDescriptor {
   render(request: PresetRenderRequest): CreatePipelineInput
 }
 
+export type PresetScheduleMode = 'manual' | 'daily' | 'weekdays' | 'every'
+export interface PreparedPresetSchedule {
+  readonly mode: PresetScheduleMode
+  readonly scheduleName: string
+  readonly action: 'none' | 'create' | 'reuse'
+  readonly timing?: ScheduleTiming
+  readonly existingScheduleId?: string
+}
+
 export interface PreparedPresetInstall {
   readonly kind: 'preset-install-plan'
   readonly preset: PresetDescriptor
@@ -48,6 +57,7 @@ export interface PreparedPresetInstall {
   readonly action: 'incomplete' | 'create' | 'reuse'
   readonly existingPipelineId?: string
   readonly pipeline?: CreatePipelineInput
+  readonly schedule: PreparedPresetSchedule
   readonly warnings: readonly string[]
 }
 
@@ -57,6 +67,9 @@ export interface AppliedPresetInstall {
   readonly action: 'created' | 'reused'
   readonly pipelineId: string
   readonly pipelineName: string
+  readonly scheduleAction: 'none' | 'created' | 'reused'
+  readonly scheduleId?: string
+  readonly nextRunAt?: string
   readonly storageFile: string
   readonly instanceId: string
   readonly workspace: string
