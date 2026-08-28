@@ -156,7 +156,7 @@ export function parsePresetCliArgs(args: readonly string[], cwd = process.cwd())
     ...(allSkills ? { allSkills } : {}),
     ...(Object.keys(skills).length ? { skills } : {}),
   }
-  return { command, presetId, install, dryRun, assumeYes, json, help }
+  return { command, presetId: presetId ?? '', install, dryRun, assumeYes, json, help }
 }
 
 async function confirmInstall(
