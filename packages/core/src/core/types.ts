@@ -69,6 +69,11 @@ export interface AgentAdapter {
   start?(signal?: AbortSignal): Promise<void> | void
   listSessions(query?: string, signal?: AbortSignal): Promise<AgentSessionDescriptor[]>
   dispatch(request: AgentDispatchRequest, signal?: AbortSignal): Promise<AgentDispatchResult>
+  validateSkillBindings?(
+    sessionId: string,
+    skills: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<void>
   subscribe?(listener: (event: AgentEvent) => Promise<void> | void): () => void
   dispose?(): Promise<void> | void
 }
@@ -133,6 +138,13 @@ export interface PipelineDefinition {
   updatedAt: string
 }
 
+export interface RunOncePipelineSnapshot {
+  version: 1
+  name: string
+  nodes: PipelineNode[]
+  edges: PipelineEdge[]
+}
+
 export interface PipelineEventAdmission {
   id: string
   pipelineId: string
@@ -170,6 +182,7 @@ export interface AutomationRunRecord {
   lastHeartbeatAt?: string
   permanentDedupe?: boolean
   nodeResults?: AutomationRunNodeResult[]
+  pipelineSnapshot?: RunOncePipelineSnapshot
 }
 export interface AutomationTerminalReceipt {
   kind: 'schedule' | 'pipeline'
