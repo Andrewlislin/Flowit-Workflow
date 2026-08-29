@@ -14,21 +14,22 @@ export function builtInPreset(id: string): PresetDefinition | undefined {
 
 function contentStudioPreset(): PresetDefinition {
   const roles = [
-    role('radar', 'Radar', 'Scan current signals and produce evidence-linked candidate topics.'),
-    role('strategist', 'Topic Strategist', 'Score candidates and select one differentiated editorial angle.'),
-    role('researcher', 'Researcher', 'Build an evidence pack with primary sources, counter-evidence, and uncertainty.'),
-    role('writer', 'Writer', 'Turn the selected angle and evidence into a structured article draft.'),
-    role('fact-checker', 'Fact Checker', 'Verify factual claims and correct unsupported or overstated language.'),
-    role('editor', 'Chief Editor', 'Produce the final article and title options without publishing it.'),
+    role('radar', '发现热点', '扫描当前信号并形成带来源的候选选题。'),
+    role('strategist', '选择题目', '按统一标准评估候选选题并确定差异化角度。'),
+    role('researcher', '研究资料', '建立证据包，包含一手来源、反方证据与不确定性。'),
+    role('writer', '写作', '把选定角度和证据整理成结构化文章草稿。'),
+    role('fact-checker', '查事实', '核查事实性陈述并纠正缺乏依据或过度表达的内容。'),
+    role('editor', '主编审核', '形成最终稿和标题选项，但不自动发布。'),
   ]
   return {
     version: 1,
     id: 'content-studio',
-    displayName: 'Content Studio',
-    description: 'Hotspot discovery → topic selection → research → writing → fact-check → editorial review.',
+    displayName: '内容工作室',
+    aliases: ['Content Studio'],
+    description: '发现热点 → 选择题目 → 研究资料 → 写作 → 查事实 → 主编审核。',
     roles,
     inputRequired: false,
-    inputLabel: 'Editorial theme / audience brief',
+    inputLabel: '内容主题 / 目标受众说明',
     render(request) {
       const brief = request.input?.trim() || 'Choose the strongest current topic for a general professional audience.'
       return linearPipeline(request, roles.map(item => item.id), {
@@ -45,20 +46,21 @@ function contentStudioPreset(): PresetDefinition {
 
 function researchLabPreset(): PresetDefinition {
   const roles = [
-    role('planner', 'Research Planner', 'Define the question, scope, evidence standard, and research plan.'),
-    role('researcher', 'Researcher', 'Collect primary evidence and structured secondary evidence.'),
-    role('skeptic', 'Skeptic', 'Search for counter-evidence, alternative explanations, and weak assumptions.'),
-    role('synthesizer', 'Synthesizer', 'Integrate evidence into conclusions with calibrated confidence.'),
-    role('reviewer', 'Research Reviewer', 'Audit traceability, uncertainty, and report quality.'),
+    role('planner', '规划问题', '明确研究问题、范围、证据标准与研究计划。'),
+    role('researcher', '搜证据', '收集一手证据和结构化的二手资料。'),
+    role('skeptic', '找反例', '主动寻找反方证据、替代解释与薄弱假设。'),
+    role('synthesizer', '综合', '综合证据并按可信度形成结论。'),
+    role('reviewer', '审核', '检查来源可追溯性、不确定性和报告质量。'),
   ]
   return {
     version: 1,
     id: 'research-lab',
-    displayName: 'Research Lab',
-    description: 'Question framing → evidence collection → counter-evidence → synthesis → research review.',
+    displayName: '深度研究',
+    aliases: ['Research Lab'],
+    description: '规划问题 → 搜证据 → 找反例 → 综合 → 审核。',
     roles,
     inputRequired: true,
-    inputLabel: 'Research question',
+    inputLabel: '研究问题',
     render(request) {
       const question = requireInput(request, 'research-lab')
       return linearPipeline(request, roles.map(item => item.id), {
@@ -74,19 +76,20 @@ function researchLabPreset(): PresetDefinition {
 
 function agentTeamPreset(): PresetDefinition {
   const roles = [
-    role('planner', 'Planner', 'Decompose the goal into a bounded execution plan and acceptance criteria.'),
-    role('researcher', 'Researcher', 'Collect the information needed to execute the plan safely.'),
-    role('executor', 'Executor', 'Perform the main work while respecting the plan and evidence.'),
-    role('reviewer', 'Reviewer', 'Check the result against acceptance criteria and identify residual risks.'),
+    role('planner', '规划', '把目标拆成有边界的执行计划和验收标准。'),
+    role('researcher', '调研', '收集安全执行计划所需要的信息、约束和依据。'),
+    role('executor', '执行', '按照计划和证据完成主要工作。'),
+    role('reviewer', 'Review', '按验收标准检查结果并指出剩余风险。'),
   ]
   return {
     version: 1,
     id: 'agent-team',
-    displayName: 'Agent Team',
-    description: 'General-purpose Planner → Researcher → Executor → Reviewer work graph.',
+    displayName: 'AI 项目小组',
+    aliases: ['Agent Team', 'AI Project Team'],
+    description: '规划 → 调研 → 执行 → Review。',
     roles,
     inputRequired: true,
-    inputLabel: 'Team goal / task brief',
+    inputLabel: '项目目标 / 任务说明',
     render(request) {
       const goal = requireInput(request, 'agent-team')
       return linearPipeline(request, roles.map(item => item.id), {

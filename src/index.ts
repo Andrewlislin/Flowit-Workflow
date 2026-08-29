@@ -1,4 +1,5 @@
 /** Agent-agnostic Flowit Orchestration Core and host adapters. DSH stays on the /dsh subpath. */
+export * from './brand.js'
 export * from './core/index.js'
 export * from './adapters/claude-code.js'
 export * from './adapters/opencode.js'
