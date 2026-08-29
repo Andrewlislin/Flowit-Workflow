@@ -10,6 +10,7 @@ export interface PresetDescriptor {
   readonly version: 1
   readonly id: string
   readonly displayName: string
+  readonly aliases?: readonly string[]
   readonly description: string
   readonly roles: readonly PresetRoleDescriptor[]
   readonly inputRequired: boolean
