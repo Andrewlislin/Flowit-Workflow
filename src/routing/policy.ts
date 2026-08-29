@@ -1,35 +1,33 @@
 import type {
   ResolvedTaskAssessmentSignals,
-  RoutingExplicitIntent,
-  RoutingMode,
   RoutingQuestion,
   SideEffectRisk,
   SignalLevel,
-  TaskAssessmentInput,
   TaskAssessmentResult,
   TaskKind,
+  TrustedTaskAssessmentInput,
 } from './types.js'
 
-export const ADAPTIVE_ROUTING_POLICY_VERSION = 'adaptive-routing-mvp-v1' as const
+export const ADAPTIVE_ROUTING_POLICY_VERSION = 'adaptive-routing-mvp-v2' as const
 
-const MODE_VALUES = new Set<RoutingMode>(['manual', 'suggest', 'auto-safe'])
-const INTENT_VALUES = new Set<RoutingExplicitIntent>([
-  'unspecified',
-  'force-flowit',
-  'force-direct',
-  'preview',
-])
 const TASK_KIND_VALUES = new Set<TaskKind>(['general', 'research', 'coding', 'content'])
 const SIDE_EFFECT_VALUES = new Set<SideEffectRisk>(['none', 'reversible', 'irreversible'])
+const RISK_RANK: Readonly<Record<SideEffectRisk, number>> = {
+  none: 0,
+  reversible: 1,
+  irreversible: 2,
+}
 
-export function assessTask(input: TaskAssessmentInput): TaskAssessmentResult {
+export function assessTask(input: TrustedTaskAssessmentInput): TaskAssessmentResult {
   const task = requiredString(input.task, 'task')
-  const mode = optionalEnum(input.mode, MODE_VALUES, 'mode') ?? 'suggest'
-  const explicitIntent =
-    optionalEnum(input.explicitIntent, INTENT_VALUES, 'explicitIntent') ?? 'unspecified'
+  const mode = routingMode(input.mode)
+  const explicitIntent = routingExplicitIntent(input.explicitIntent)
+  if (typeof input.trustedAuthority !== 'boolean') {
+    throw new Error('trustedAuthority must be a boolean')
+  }
   const inferred = inferSignals(task)
   const signals = resolveSignals(input.signals ?? {}, inferred)
-  const confidence = optionalUnitInterval(input.confidence, 'confidence') ?? inferConfidence(input, task)
+  const confidence = inferConfidence(task, signals)
   const reasons: string[] = []
   let score = 0
 
@@ -69,34 +67,51 @@ export function assessTask(input: TaskAssessmentInput): TaskAssessmentResult {
   }
   score = Math.max(0, score)
 
+  const hardChoiceRequired =
+    signals.sideEffectRisk === 'irreversible' ||
+    signals.ambiguity >= 2 ||
+    signals.crossSessionNeed ||
+    signals.crossAdapterNeed
+
   let decision: TaskAssessmentResult['decision']
   if (explicitIntent === 'force-direct') {
     decision = 'direct'
-    reasons.unshift('The current user instruction explicitly disables Flowit orchestration.')
+    reasons.unshift('Trusted top-level routing authority explicitly disables Flowit orchestration.')
+  } else if (hardChoiceRequired) {
+    decision = 'ask'
   } else if (explicitIntent === 'force-flowit' || explicitIntent === 'preview') {
     decision = 'pipeline'
     reasons.unshift(
       explicitIntent === 'preview'
-        ? 'The current user instruction explicitly requests a Flowit proposal preview.'
-        : 'The current user instruction explicitly requests Flowit orchestration.',
+        ? 'Trusted top-level routing authority requests a Flowit proposal preview.'
+        : 'Trusted top-level routing authority explicitly requests Flowit orchestration.',
     )
   } else if (mode === 'manual') {
     decision = 'direct'
-    reasons.unshift('Routing mode is manual and this task did not explicitly request Flowit.')
+    reasons.unshift('Routing mode is manual and no trusted top-level authority requested Flowit.')
+  } else if (score <= 2) {
+    decision = 'direct'
+  } else if (score <= 5 || confidence < 0.75) {
+    decision = 'ask'
   } else {
-    const uncertain = signals.ambiguity >= 2 || (score >= 3 && confidence < 0.75)
-    const unsupportedMvpTopology = signals.crossSessionNeed || signals.crossAdapterNeed
-    if (signals.sideEffectRisk === 'irreversible' || uncertain || unsupportedMvpTopology) {
-      decision = 'ask'
-    } else if (score <= 2) {
-      decision = 'direct'
-    } else if (score <= 5) {
-      decision = 'ask'
-    } else {
-      decision = 'pipeline'
-    }
+    decision = 'pipeline'
   }
 
+  if (signals.sideEffectRisk === 'irreversible') {
+    reasons.push('Irreversible external side effects cannot be auto-routed by the MVP.')
+  }
+  if (signals.ambiguity >= 2) {
+    reasons.push('The desired deliverable or constraints are too ambiguous for automatic decomposition.')
+  }
+  if (signals.crossSessionNeed || signals.crossAdapterNeed) {
+    reasons.push('The MVP supports one confirmed Session on one Adapter only.')
+  }
+  if (confidence < 0.75 && score >= 3) {
+    reasons.push('Assessment confidence is below the automatic routing threshold.')
+  }
+  if (mode === 'auto-safe' && !input.trustedAuthority) {
+    reasons.push('Auto-safe execution is disabled without host-issued top-level routing authority.')
+  }
   if (reasons.length === 0) {
     reasons.push(
       decision === 'direct'
@@ -105,24 +120,12 @@ export function assessTask(input: TaskAssessmentInput): TaskAssessmentResult {
     )
   }
 
-  if (signals.sideEffectRisk === 'irreversible') {
-    reasons.push('Irreversible external side effects require an explicit user choice in the MVP.')
-  }
-  if (signals.ambiguity >= 2) {
-    reasons.push('The desired deliverable or constraints are too ambiguous for automatic decomposition.')
-  }
-  if (confidence < 0.75 && score >= 3) {
-    reasons.push('Assessment confidence is below the automatic routing threshold.')
-  }
-  if (signals.crossSessionNeed || signals.crossAdapterNeed) {
-    reasons.push('The MVP supports one confirmed Session on one Adapter only.')
-  }
-
   const autoExecuteAllowed =
     decision === 'pipeline' &&
     mode === 'auto-safe' &&
+    input.trustedAuthority &&
     explicitIntent !== 'preview' &&
-    confidence >= 0.85 &&
+    confidence >= 0.8 &&
     signals.sideEffectRisk === 'none' &&
     signals.ambiguity <= 1 &&
     !signals.crossSessionNeed &&
@@ -135,6 +138,7 @@ export function assessTask(input: TaskAssessmentInput): TaskAssessmentResult {
     task,
     mode,
     explicitIntent,
+    authorityTrusted: input.trustedAuthority,
     decision,
     score,
     confidence,
@@ -146,29 +150,53 @@ export function assessTask(input: TaskAssessmentInput): TaskAssessmentResult {
 }
 
 function resolveSignals(
-  supplied: TaskAssessmentInput['signals'],
+  supplied: TrustedTaskAssessmentInput['signals'],
   inferred: ResolvedTaskAssessmentSignals,
 ): ResolvedTaskAssessmentSignals {
   const input = supplied ?? {}
+  const suppliedRisk = optionalEnum(
+    input.sideEffectRisk,
+    SIDE_EFFECT_VALUES,
+    'signals.sideEffectRisk',
+  )
   return {
     taskKind: optionalEnum(input.taskKind, TASK_KIND_VALUES, 'signals.taskKind') ?? inferred.taskKind,
-    distinctStages:
-      optionalPositiveInteger(input.distinctStages, 'signals.distinctStages') ?? inferred.distinctStages,
-    decomposability:
-      optionalSignal(input.decomposability, 'signals.decomposability') ?? inferred.decomposability,
-    coupling: optionalSignal(input.coupling, 'signals.coupling') ?? inferred.coupling,
-    durabilityNeed:
-      optionalSignal(input.durabilityNeed, 'signals.durabilityNeed') ?? inferred.durabilityNeed,
-    reviewNeed: optionalSignal(input.reviewNeed, 'signals.reviewNeed') ?? inferred.reviewNeed,
-    requiresResearch: optionalBoolean(input.requiresResearch, 'signals.requiresResearch') ?? inferred.requiresResearch,
-    repeatable: optionalBoolean(input.repeatable, 'signals.repeatable') ?? inferred.repeatable,
+    distinctStages: Math.max(
+      optionalPositiveInteger(input.distinctStages, 'signals.distinctStages') ?? 1,
+      inferred.distinctStages,
+    ),
+    decomposability: maximumSignal(
+      optionalSignal(input.decomposability, 'signals.decomposability'),
+      inferred.decomposability,
+    ),
+    coupling: maximumSignal(
+      optionalSignal(input.coupling, 'signals.coupling'),
+      inferred.coupling,
+    ),
+    durabilityNeed: maximumSignal(
+      optionalSignal(input.durabilityNeed, 'signals.durabilityNeed'),
+      inferred.durabilityNeed,
+    ),
+    reviewNeed: maximumSignal(
+      optionalSignal(input.reviewNeed, 'signals.reviewNeed'),
+      inferred.reviewNeed,
+    ),
+    requiresResearch:
+      (optionalBoolean(input.requiresResearch, 'signals.requiresResearch') ?? false) ||
+      inferred.requiresResearch,
+    repeatable:
+      (optionalBoolean(input.repeatable, 'signals.repeatable') ?? false) || inferred.repeatable,
     crossSessionNeed:
-      optionalBoolean(input.crossSessionNeed, 'signals.crossSessionNeed') ?? inferred.crossSessionNeed,
+      (optionalBoolean(input.crossSessionNeed, 'signals.crossSessionNeed') ?? false) ||
+      inferred.crossSessionNeed,
     crossAdapterNeed:
-      optionalBoolean(input.crossAdapterNeed, 'signals.crossAdapterNeed') ?? inferred.crossAdapterNeed,
-    sideEffectRisk:
-      optionalEnum(input.sideEffectRisk, SIDE_EFFECT_VALUES, 'signals.sideEffectRisk') ?? inferred.sideEffectRisk,
-    ambiguity: optionalSignal(input.ambiguity, 'signals.ambiguity') ?? inferred.ambiguity,
+      (optionalBoolean(input.crossAdapterNeed, 'signals.crossAdapterNeed') ?? false) ||
+      inferred.crossAdapterNeed,
+    sideEffectRisk: maximumRisk(suppliedRisk, inferred.sideEffectRisk),
+    ambiguity: maximumSignal(
+      optionalSignal(input.ambiguity, 'signals.ambiguity'),
+      inferred.ambiguity,
+    ),
   }
 }
 
@@ -190,14 +218,11 @@ function inferSignals(task: string): ResolvedTaskAssessmentSignals {
     /(?:耗时|长时间|中断恢复|失败重试|断点|长期|resume|recover|retry|checkpoint|long[- ]?running)/i,
     /(?:必须恢复|不能重来|持久化|durable|must resume)/i,
   ])
-  const decomposability = levelForCount(distinctStages)
-  const coupling = inferCoupling(task, distinctStages)
-  const ambiguity = inferAmbiguity(task)
   return {
     taskKind,
     distinctStages,
-    decomposability,
-    coupling,
+    decomposability: levelForCount(distinctStages),
+    coupling: inferCoupling(task, distinctStages),
     durabilityNeed,
     reviewNeed,
     requiresResearch,
@@ -205,7 +230,7 @@ function inferSignals(task: string): ResolvedTaskAssessmentSignals {
     crossSessionNeed,
     crossAdapterNeed,
     sideEffectRisk,
-    ambiguity,
+    ambiguity: inferAmbiguity(task),
   }
 }
 
@@ -246,6 +271,13 @@ function inferSideEffectRisk(task: string): SideEffectRisk {
   return 'none'
 }
 
+function inferConfidence(task: string, signals: ResolvedTaskAssessmentSignals): number {
+  if (signals.ambiguity >= 2) return 0.6
+  if (task.length >= 80) return 0.82
+  if (task.length >= 40) return 0.78
+  return 0.72
+}
+
 function signalFromKeywords(task: string, levels: readonly RegExp[]): SignalLevel {
   if (levels[1]?.test(task)) return 3
   if (levels[0]?.test(task)) return 2
@@ -259,15 +291,21 @@ function levelForCount(count: number): SignalLevel {
   return 0
 }
 
-function inferConfidence(input: TaskAssessmentInput, task: string): number {
-  if (input.explicitIntent && input.explicitIntent !== 'unspecified') return 1
-  if (input.signals && Object.keys(input.signals).length >= 5) return 0.85
-  return task.length >= 40 ? 0.78 : 0.72
+function maximumSignal(supplied: SignalLevel | undefined, inferred: SignalLevel): SignalLevel {
+  return Math.max(supplied ?? 0, inferred) as SignalLevel
+}
+
+function maximumRisk(
+  supplied: SideEffectRisk | undefined,
+  inferred: SideEffectRisk,
+): SideEffectRisk {
+  if (!supplied || RISK_RANK[inferred] >= RISK_RANK[supplied]) return inferred
+  return supplied
 }
 
 function routingQuestion(score: number): RoutingQuestion {
   return {
-    prompt: `This task is near the Flowit routing boundary (score ${score}). Choose how to continue.`,
+    prompt: `This task is near or beyond a protected Flowit routing boundary (score ${score}). Choose how to continue.`,
     options: [
       {
         id: 'direct',
@@ -277,7 +315,7 @@ function routingQuestion(score: number): RoutingQuestion {
       {
         id: 'pipeline',
         label: '使用浮域拆解并执行',
-        consequence: 'Create a bounded, recoverable, single-Session Pipeline.',
+        consequence: 'Prepare a bounded, recoverable, single-Session run-once Pipeline.',
       },
       {
         id: 'preview',
@@ -313,14 +351,6 @@ function optionalSignal(value: unknown, name: string): SignalLevel | undefined {
   return Number(value) as SignalLevel
 }
 
-function optionalUnitInterval(value: unknown, name: string): number | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
-    throw new Error(`${name} must be a number from 0 through 1`)
-  }
-  return value
-}
-
 function optionalEnum<T extends string>(
   value: unknown,
   allowed: ReadonlySet<T>,
@@ -331,4 +361,23 @@ function optionalEnum<T extends string>(
     throw new Error(`${name} must be one of: ${[...allowed].join(', ')}`)
   }
   return value as T
+}
+
+function routingMode(value: unknown): TrustedTaskAssessmentInput['mode'] {
+  if (value !== 'manual' && value !== 'suggest' && value !== 'auto-safe') {
+    throw new Error('mode must be manual, suggest, or auto-safe')
+  }
+  return value
+}
+
+function routingExplicitIntent(value: unknown): TrustedTaskAssessmentInput['explicitIntent'] {
+  if (
+    value !== 'unspecified' &&
+    value !== 'force-flowit' &&
+    value !== 'force-direct' &&
+    value !== 'preview'
+  ) {
+    throw new Error('explicitIntent is invalid')
+  }
+  return value
 }
