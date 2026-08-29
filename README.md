@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/flowit-hero.jpg" alt="浮域（Flowit Workflow）— CoaseEdge 出品的多 Agent 持久工作流编排平台" width="100%" />
+<img src="assets/flowit-hero.svg" alt="浮域（Flowit Workflow）— CoaseEdge 出品的多 Agent 持久工作流编排平台" width="100%" />
 
 <br />
 
