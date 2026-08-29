@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - 'publish/v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Enforce registry-only dependency sources
+        run: node scripts/check-dependency-sources.mjs
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Verify release branch and main ancestry
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          EXPECTED_BRANCH="publish/v${VERSION}"
+          if [[ "${GITHUB_REF_NAME}" != "${EXPECTED_BRANCH}" ]]; then
+            echo "release branch ${GITHUB_REF_NAME} does not match package version ${VERSION}" >&2
+            exit 1
+          fi
+          git fetch origin main --depth=200
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "release commit ${GITHUB_SHA} is not reachable from main" >&2
+            exit 1
+          fi
+          NOTES="docs/releases/v${VERSION}.md"
+          test -f "${NOTES}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=v${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "notes=${NOTES}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install reviewed workspace graph
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Run full release gate
+        run: pnpm check
+
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd .tmp-packs
+          sha256sum *.tgz | sort > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload exact npm tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarballs-${{ steps.version.outputs.tag }}
+          path: |
+            .tmp-packs/*.tgz
+            .tmp-packs/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NOTES: ${{ steps.version.outputs.notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "GitHub Release ${TAG} already exists; retaining existing immutable release assets."
+          else
+            gh release create "${TAG}" \
+              .tmp-packs/*.tgz \
+              .tmp-packs/SHA256SUMS \
+              --target "${GITHUB_SHA}" \
+              --title "${TAG}" \
+              --notes-file "${NOTES}" \
+              --prerelease
+          fi
+
+      - name: Configure npm token fallback
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${NPM_TOKEN:-}" ]]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${HOME}/.npmrc"
+            chmod 0600 "${HOME}/.npmrc"
+            echo "Configured NPM_TOKEN fallback."
+          else
+            echo "NPM_TOKEN is not configured; npm publish will use Trusted Publishing/OIDC if the @coaseedge packages authorize this workflow."
+          fi
+
+      - name: Publish exact tarballs to npm beta
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          publish_one() {
+            local package_name="$1"
+            local tarball="$2"
+            if npm view "${package_name}@${VERSION}" version >/dev/null 2>&1; then
+              echo "${package_name}@${VERSION} is already published; skipping."
+              return 0
+            fi
+            test -f "${tarball}"
+            npm publish "${tarball}" --access public --tag beta --provenance
+          }
+
+          publish_one '@coaseedge/flowit-core' ".tmp-packs/coaseedge-flowit-core-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-adapter-file-bridge' ".tmp-packs/coaseedge-flowit-adapter-file-bridge-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-adapter-claude-code' ".tmp-packs/coaseedge-flowit-adapter-claude-code-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-adapter-codex' ".tmp-packs/coaseedge-flowit-adapter-codex-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-adapter-opencode' ".tmp-packs/coaseedge-flowit-adapter-opencode-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-adapter-dsh' ".tmp-packs/coaseedge-flowit-adapter-dsh-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-adapter-workbuddy' ".tmp-packs/coaseedge-flowit-adapter-workbuddy-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-adapter-doubao-office' ".tmp-packs/coaseedge-flowit-adapter-doubao-office-${VERSION}.tgz"
+          publish_one '@coaseedge/flowit-workflow' ".tmp-packs/coaseedge-flowit-workflow-${VERSION}.tgz"
