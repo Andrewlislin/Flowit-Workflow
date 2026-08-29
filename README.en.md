@@ -23,93 +23,109 @@ A **CoaseEdge / 高斯边界** product.
 
 ## What is Flowit?
 
-WorkBuddy, Claude Code, Codex, OpenCode, DeepSeek Harness, Doubao Office and similar agents are already good at doing a task when you ask them.
+WorkBuddy, Claude Code, Codex, OpenCode, DeepSeek Harness, Doubao Office and similar agents are already good at doing a task when asked.
 
 Flowit solves a different problem: **how to keep those agents doing a repeatable, multi-step job reliably over time.**
-
-A single agent usually looks like this:
-
-```text
-You
- ↓
-Agent
- ↓
-One task
- ↓
-Result
-```
-
-With Flowit, the same work can become:
 
 ```text
 Schedule / event / manual start
             ↓
-          Plan
+           Plan
             ↓
          Research
             ↓
          Execute
             ↓
-         Review
+          Review
             ↓
       Human approval
 ```
 
-Flowit keeps track of when work should run, which Session owns each stage, which Skills are required, what context may cross boundaries, which stages are complete, and where recovery should resume after a failure.
+Flowit tracks when work should run, which Session owns each stage, which Skills are required, what context may cross boundaries, which stages are complete, and where recovery resumes after a failure.
 
-It does **not** replace host authentication, model configuration, permissions, sandboxes, workspace trust or tool approvals. The selected agent still performs the actual work.
+It does **not** replace host authentication, models, permissions, sandboxes, workspace trust or tool approvals. The selected agent still performs the actual work.
 
-## Why not just use one agent directly?
+## When is Flowit worth using?
 
 For a quick email rewrite, one PDF summary, one small function or a tiny bug fix, directly using WorkBuddy, Claude Code or Codex is usually simpler.
 
-Flowit becomes more useful when the job is repeated, long-lived, review-heavy or shared across multiple agents.
+Flowit becomes more useful when work is:
 
-| Agent alone | Flowit + Agent |
-| --- | --- |
-| “Do this now” | “Keep doing this workflow” |
-| One long prompt | Explicit stages and checkpoints |
-| You remember when to trigger it | Durable scheduling |
-| One Session often owns everything | One or many Sessions can divide roles |
-| A failure may require re-explaining context | Completed stages and run state persist |
-| The process lives inside prompts | The process becomes a reusable Pipeline / Preset |
-| The same agent writes and reviews | Execution and Review can be separated |
-| Switching hosts often means rewriting prompts | The same business flow can bind to different hosts |
+- repeated daily or weekly;
+- made of fixed stages;
+- reviewed by a second role;
+- long enough that interruption and recovery matter;
+- split across different agents or hosts;
+- valuable enough to standardize as a reusable team workflow.
 
 A simple rule:
 
 > **AI helps me do one thing → use the agent directly.**  
 > **AI should keep operating a repeatable process → use Flowit.**
 
+## How is Flowit different from a Harness or Agent Team?
+
+Think of them as three layers:
+
+- **Harness**: makes an agent runnable and provides models, tools, Sessions and host capabilities.
+- **Agent Team**: coordinates multiple role-based agents such as Planner, Researcher, Coder and Reviewer.
+- **Flowit**: adds a **durable workflow control plane** above agents and agent teams for scheduling, persisted state, recovery, cross-host execution and reliable orchestration.
+
+| Capability | Typical Harness | Typical Agent Team | **Flowit Workflow** |
+| --- | --- | --- | --- |
+| Primary role | Agent runtime / tool environment | Multi-agent coordination | **Durable agent workflow control plane** |
+| Single-agent execution | Strong | Depends on its harness | Reuses existing agents rather than replacing them |
+| Multiple roles / agents | Usually limited | Strong | **Strong; one Session or many Sessions** |
+| Workflow state | Often Session / process local | Often remembered by a manager agent | **Persisted Pipeline / Run / Node state** |
+| Scheduling | Often cron / external system | Usually not core | **First-class durable Schedule** |
+| DAG / fixed process | Optional | Often conversation / handoff driven | **Pipeline DAG + durable checkpoints** |
+| Failure recovery | Mostly Session-level | Coordinator-dependent | **Lease + retry + checkpoint + stale recovery** |
+| Event reliability | Implementation-specific | Often process-queue based | **Durable event admission before execution** |
+| Cross-host execution | Usually tied to one host | Usually inside one framework | **WorkBuddy / Claude / Codex / OpenCode / DSH / Doubao** |
+| Skill requirements | Host-internal | Often prompt conventions | **Execution-time Skill binding; fail closed when unavailable** |
+| Context transfer | Transcript / memory | Agent-to-agent messages | **Context Graph references; no automatic authority/transcript copying** |
+| Multi-worker races | Often assumes one instance | Rarely a core concern | **Atomic claims, leases, heartbeats and fencing** |
+| Weak-API / Bridge hosts | Custom integration work | Usually limited | **Bridge v2 with request IDs, idempotency keys, receipts and leases** |
+| Product templates | Skill / agent template | Team template | **Preset = roles + prompts + artifacts + graph + host + schedule** |
+| Setup lifecycle | Host-specific | Usually no unified layer | **setup / doctor / repair / uninstall** |
+| Side-effect semantics | Often implicit | Often implicit | **Explicit at-least-once; no fake generic exactly-once claim** |
+| Best fit | One agent doing work | Temporary multi-agent collaboration | **Long-running, repeatable, recoverable cross-agent business processes** |
+
+In one line:
+
+```text
+Harness    = make one agent runnable
+Agent Team = make multiple agents collaborate
+Flowit     = make agents / agent teams operate reliably as a long-lived system
+```
+
 ## Four core advantages
 
 ### Natural-language setup
 
-Ordinary users do not need to memorize CLI syntax. The recommended path is to ask the current agent to inspect, install, repair and verify Flowit.
+Ordinary users do not need to memorize CLI syntax. The recommended path is to ask the current agent to inspect, install, repair and verify Flowit:
 
 > Install the latest beta of Flowit Workflow and integrate it with the agent you are running in. First inspect my environment and existing configuration. Do not modify anything yet. Show me what files and permissions you plan to change, wait for my approval, then install it and run a health check. If any host-native UI step is still required, explain it in simple language.
 
-The setup framework plans first, requires confirmation, then applies changes. Conflicting configuration fails closed instead of being silently overwritten.
+The setup framework plans first, requires confirmation, then applies changes. Ownership conflicts fail closed instead of being silently overwritten.
 
 ### Multi-agent collaboration
 
-One business workflow can divide work by role:
-
 ```text
 WorkBuddy
-Web / office collection
-        ↓
+Web / office work
+      ↓
 Claude Code
 Deep analysis
-        ↓
+      ↓
 Codex
-Technical review
-        ↓
+Implementation / review
+      ↓
 WorkBuddy
-Management report
+Final report
 ```
 
-You can also bind every role to one Session. Flowit supports both “one agent working in explicit stages” and “multiple agents working like a team.”
+Every role can also use one Session. Flowit separates **role boundaries** from **Session count**: start with one agent working in explicit stages, then split roles across agents when needed.
 
 ### Recoverable execution
 
@@ -127,7 +143,7 @@ Flowit supports manual, daily, weekday and fixed-interval durable schedules. Use
 
 > Check every two hours.
 
-The schedule belongs to Flowit’s durable state; it does not depend on the agent remembering to do something tomorrow.
+The Schedule belongs to Flowit’s durable state; it does not depend on the agent remembering to do something tomorrow.
 
 ## The easiest way to start: talk to your agent
 
@@ -152,7 +168,7 @@ Requires Node.js `^22.19.0` or `>=24.0.0`.
 npx @coaseedge/flowit-workflow@beta setup
 ```
 
-The stable technical identifiers remain:
+Stable technical identifiers remain:
 
 ```text
 npm: @coaseedge/flowit-workflow
@@ -161,173 +177,30 @@ CLI: flowit-workflow
 
 </details>
 
-## How setup and usage differ by host
+## Six supported hosts
 
-### WorkBuddy: a strong entry point for office automation
+| Host | Flowit integration | Good ordinary-user scenarios | Important boundary |
+| --- | --- | --- | --- |
+| **WorkBuddy** | MCP + Hooks + Bridge / Managed Driver | Daily briefs, web research, office automation, GUI work | Desktop Bridge needs a WorkBuddy Automation to invoke the Worker periodically |
+| **Claude Code** | skills-directory Plugin + Hooks + MCP | Technical research, long documents, large refactors | Project scope still obeys Claude workspace-trust and MCP approval |
+| **Codex** | App Server v2 + MCP config | Implementation, tests, code review | Codex sandbox and approval boundaries remain authoritative |
+| **OpenCode V2** | Official V2 SDK / HTTP Server | Nightly code checks and development workflows | Flowit does not silently launch an OpenCode server |
+| **DeepSeek Harness** | Native Cordis Plugin | Long-running research and background agents | DSH uses an embedded Flowit store; mixed root-daemon topologies fail closed |
+| **Doubao Office** | Bridge Worker | Office summaries, meeting/document workflows | Skill enablement and native recurring tasks remain host-UI steps |
 
-Ask WorkBuddy:
-
-> Install Flowit for the current WorkBuddy environment. Preserve my existing MCP servers, Skills and Hooks. Show me the plan first, apply it only after I approve it, then run a health check.
-
-Flowit configures four machine-side layers:
-
-```text
-Flowit MCP
-+
-Bridge Worker Skill
-+
-WorkBuddy lifecycle Hooks
-+
-Durable Bridge directories
-```
-
-**WorkBuddy Desktop still requires one host-native UI action:** create a WorkBuddy Automation that periodically invokes the **Flowit Workflow Bridge Worker** Skill. Think of it as an inbox worker that checks whether Flowit has new tasks.
-
-Managed Driver deployments do not need this desktop polling step.
-
-Typical scenario:
-
-> Create an “industry daily” workflow in Flowit. Run it every weekday at 8:00 AM. Track AI, enterprise software and intelligent-office news. Find current signals, select the important items, research background, fact-check them and generate a Chinese management summary. Do not publish externally.
-
-This maps naturally to **Content Studio / 内容工作室**.
-
-### Claude Code: technical research, long documents and large coding jobs
-
-Ask Claude Code:
-
-> Install Flowit in the current Claude Code environment. Do not scatter changes across unrelated settings. Show me the setup plan first, install after approval, reload the plugin and verify the integration.
-
-Flowit uses Claude Code’s skills-directory plugin model. Personal scope is installed under:
-
-```text
-~/.claude/skills/flowit-workflow/
-```
-
-The plugin bundles Flowit Skills, Hooks and MCP. Project scope is also supported; Claude’s own workspace-trust and MCP approval gates remain authoritative.
-
-Typical scenario:
-
-> Research whether this system should migrate to an event-driven architecture. Plan the question, gather primary evidence, deliberately search for counter-evidence, then synthesize conclusions and limitations. Do not only argue for the migration.
-
-This maps naturally to **Deep Research / 深度研究**.
-
-### Codex: implementation, testing and independent review
-
-Ask Codex:
-
-> Configure Flowit for this Codex environment. Do not rewrite my config.toml. Preserve my model, sandbox, comments and other MCP servers. If a same-name unmanaged configuration already exists, stop and explain the conflict.
-
-Flowit manages only its own Codex MCP block and does not reserialize the entire TOML document.
-
-Typical scenario:
-
-> Use Flowit to handle this complex issue. First analyze requirements and affected code, then plan, implement, test and run an independent Review stage. List blocking review findings clearly. Do not merge automatically.
-
-This maps naturally to **AI Project Team / AI 项目小组**.
-
-### OpenCode V2: for existing OpenCode development environments
-
-Ask OpenCode:
-
-> Install Flowit, preserving my JSONC comments, models, agents and other MCP servers. After setup, check whether the OpenCode Server is reachable.
-
-Flowit changes only its own `mcp.servers.flowit-workflow` entry.
-
-Flowit does **not** silently launch an unmanaged OpenCode background process. If the server is not running, Doctor reports the explicit Serve/Server step.
-
-Typical scenario:
-
-> Every night, inspect dependencies, failing tests, obvious technical debt and TODO risk. Do not modify code; generate a report, then use a second stage to challenge the first stage’s conclusions.
-
-### DeepSeek Harness: long-running agent systems
-
-DSH is different from MCP-centric hosts. Flowit integrates through the native Cordis plugin / patch model.
-
-Ask the Harness agent:
-
-> Install the native Flowit plugin. Inspect the current Harness configuration first, preserve unrelated Cordis plugins, then tell me whether a restart is required.
-
-User scope installs into the persistent home patch. Project scope uses an explicit project overlay because Harness currently has no project-local persistent patch layer.
-
-Typical scenario:
-
-> Research the 20 technical projects we track every day. When a major version change appears, investigate it further. For every project, gather evidence, search for counter-evidence and preserve historical conclusions.
-
-### Doubao Office: GUI + Bridge office workflows
-
-Doubao Office uses Flowit Bridge v2. Flowit does not pretend the host exposes stable public APIs for Session Resume, Skill installation or Automation management when those APIs are not documented.
-
-After machine-side setup, the user completes these host-native UI steps:
-
-```text
-Import / enable Flowit Worker Skill
-          ↓
-Authorize the Flowit Bridge directory
-          ↓
-Create a recurring Doubao task that invokes the Worker
-```
-
-Typical scenario:
-
-> Every weekday at 5:30 PM, summarize today’s project documents, meeting notes and tasks. Output completed work, unfinished work, tomorrow’s priorities and risks. Generate the report only; do not send it automatically.
+See [docs/setup.md](docs/setup.md) for setup, Doctor, Repair and Uninstall behavior.
 
 ## Three built-in work modes
 
-Users do not need to memorize Preset IDs. Chinese UI surfaces use the product names below while stable internal IDs remain compatible.
-
-| Work mode | Best for | Stable ID |
+| Work mode | Flow | Best for |
 | --- | --- | --- |
-| **Content Studio / 内容工作室** | News, industry content, daily reports, article drafts | `content-studio` |
-| **Deep Research / 深度研究** | Market, technical, competitor and policy research | `research-lab` |
-| **AI Project Team / AI 项目小组** | Coding, migration, complex plans and multi-step execution | `agent-team` |
+| **Content Studio / 内容工作室** | Discover → Select → Research → Write → Fact-check → Chief edit | News, industry content, daily reports, article drafts |
+| **Deep Research / 深度研究** | Frame → Evidence → Counter-evidence → Synthesize → Review | Market, technical, competitor and policy research |
+| **AI Project Team / AI 项目小组** | Plan → Research → Execute → Review | Coding, migration, complex plans and multi-step execution |
 
-### Content Studio
+Content Studio ends at a human-reviewable final artifact and **does not publish externally by default**.
 
-```text
-Discover signals
-      ↓
-Choose topic
-      ↓
-Research evidence
-      ↓
-Write
-      ↓
-Fact-check
-      ↓
-Chief edit
-```
-
-The workflow ends at a human-reviewable final artifact and **does not publish externally by default**.
-
-### Deep Research
-
-```text
-Frame question
-      ↓
-Gather evidence
-      ↓
-Find counter-evidence
-      ↓
-Synthesize
-      ↓
-Review
-```
-
-The workflow emphasizes primary evidence, opposing evidence, uncertainty and traceability.
-
-### AI Project Team
-
-```text
-Plan
- ↓
-Research
- ↓
-Execute
- ↓
-Review
-```
-
-Useful for large issues, refactors, migration plans and complex office work.
+A Preset can bind every role to one Session or map roles to different Sessions, hosts and Skills. Presets can also create daily, weekday and fixed-interval durable Schedules. See [docs/presets.md](docs/presets.md).
 
 ## Representative office scenarios
 
@@ -344,7 +217,7 @@ Deep research
      ↓
 Write + fact-check
      ↓
-Final management summary
+Management summary
 ```
 
 ### Weekly competitor research
@@ -361,9 +234,7 @@ Compare products / funding / hiring / marketing
 Conclusions, risks, opportunities and next-week watchlist
 ```
 
-### Project-day summary
-
-WorkBuddy or Doubao Office can summarize documents, meeting notes, tasks and risks at a fixed time, stopping at a human-reviewable result.
+WorkBuddy or Doubao Office can also summarize documents, meeting notes, tasks and risks at a fixed time while stopping at human review.
 
 ## Representative coding scenarios
 
@@ -391,26 +262,6 @@ For a two-minute fix, direct Codex is simpler. For a 30–60 minute multi-stage 
 
 Run dependency, failing-test, TODO, technical-debt and risk checks every night, producing a report without automatically modifying production code.
 
-## Cross-agent workflows
-
-Presets can bind roles to different hosts and Sessions:
-
-```text
-WorkBuddy
-Web / GUI work
-      ↓
-Claude Code
-Deep analysis
-      ↓
-Codex
-Code and technical review
-      ↓
-WorkBuddy
-Management summary
-```
-
-DeepSeek Harness currently uses an embedded Flowit Core/store. Mixed DSH and root-daemon hosts inside one Preset fail closed rather than pretending an unreliable topology is supported.
-
 ## Safety boundaries
 
 Flowit improves **reliability, organization, repeatability and recovery**. It does not make the underlying model intrinsically smarter.
@@ -430,8 +281,6 @@ For email sending, publishing, deletion or production deployment, prefer human a
 
 <img src="assets/flowit-architecture.svg" alt="Flowit architecture: Schedule, Host Event, Pipeline and Host Adapter" width="100%" />
 
-The Core stores orchestration facts and references. Host adapters translate those facts into host-native Session, Skill, Context, Event and lifecycle operations.
-
 ```text
 Schedule / Host Event
         ↓
@@ -446,54 +295,9 @@ Host Adapter
 WorkBuddy / Claude Code / Codex / OpenCode / DSH / Doubao Office
 ```
 
-### Host support
+The Core stores orchestration facts and references. Host adapters translate those facts into host-native Session, Skill, Context, Event and lifecycle operations.
 
-| Host | Integration | Notes |
-| --- | --- | --- |
-| DeepSeek Harness | Reference / Native | Cordis Plugin, Session, Skill and events |
-| Claude Code | Pilot | Plugin + Hooks + MCP + resume |
-| OpenCode V2 | Experimental | Official V2 SDK / HTTP Server |
-| Codex | Experimental | App Server v2 + stdio MCP configuration |
-| WorkBuddy | Hybrid | Desktop Bridge or Managed Driver |
-| Doubao Office | Bridge | Bridge Worker; host Automation remains manual |
-
-OpenCode and Codex capability claims remain conservative and depend on pinned host contracts and real-host validation.
-
-## Durable execution semantics
-
-```text
-trigger observed
-      ↓
-durable admission / atomic claim
-      ↓
-worker lease + heartbeat
-      ↓
-dispatch / checkpoint / retry
-      ↓
-completed → bounded terminal receipt
-failed    → retry or dead-letter
-```
-
-Core principles include:
-
-- Schedule claims atomically verify `active` and the current `nextRunAt`;
-- host events are durably admitted before listener acknowledgement;
-- Pipeline retries use stable correlation keys;
-- active and retryable runs survive history pruning;
-- terminal replay deduplication is bounded by count and retention time;
-- external side effects without host-native idempotency can still repeat after an extreme crash.
-
-## Storage and migration
-
-Default storage:
-
-```text
-~/.flowit-workflow/instances/<instanceId>/workflow.json
-```
-
-DSH-only Presets default to the corresponding embedded Harness store.
-
-Conflicting non-empty legacy databases fail closed rather than being silently merged.
+See [docs/architecture.md](docs/architecture.md) for the execution model.
 
 ## Developer quick start
 
@@ -505,14 +309,6 @@ pnpm test
 pnpm test:host-contracts
 pnpm build
 ```
-
-| Command | Purpose |
-| --- | --- |
-| `pnpm check:supply-chain` | Reject URL / Git / local-file / tarball dependency sources |
-| `pnpm typecheck` | Strict TypeScript validation |
-| `pnpm test` | Unit, Recovery, Lease, Migration and Concurrency tests |
-| `pnpm test:host-contracts` | Pinned host-protocol contract tests |
-| `pnpm build` | Build the publishable distribution |
 
 ## Documentation
 
