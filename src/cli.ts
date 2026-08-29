@@ -10,6 +10,7 @@ import { acquireDaemonLease, type DaemonLease } from './daemon-lease.js'
 import { publishDaemonReadiness, terminateDetachedChild, waitForDaemonReadiness } from './daemon-readiness.js'
 import { JsonWorkflowStore } from './core/store.js'
 import { createConfiguredRuntime, requireBuiltInAdapterId, resolveConfiguredRuntime, type BuiltInAdapterId } from './runtime-factory.js'
+import { runSetupCli, type SetupCliCommand } from './setup/cli.js'
 
 const DETACHED_READY_TIMEOUT_MS = 15_000
 
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
     case 'daemon': case 'claude-daemon': await runDaemon(command === 'claude-daemon' ? ['--adapter=claude-code', ...args] : args); return
     case 'sessions': case 'claude-sessions': await runSessions(command === 'claude-sessions' ? ['--adapter=claude-code', ...args] : args); return
     case 'migrate': await runMigration(args); return
+    case 'setup': case 'doctor': case 'repair': case 'uninstall': await runSetupCli(command satisfies SetupCliCommand, args); return
     default: console.log(help())
   }
 }
@@ -86,4 +88,4 @@ async function announceReady(payload: {ready:boolean;pid:number;error?:string}):
 async function readStdin(): Promise<string> { const chunks: Buffer[] = []; for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)); return Buffer.concat(chunks).toString('utf8') }
 function option(args: string[], name: string): string | undefined { const prefix = `--${name}=`; const inline = args.find(arg => arg.startsWith(prefix)); if (inline) return inline.slice(prefix.length); const index = args.indexOf(`--${name}`); return index >= 0 ? args[index + 1] : undefined }
 function options(args: string[], name: string): string[] { const prefix = `--${name}=`; const result: string[] = []; for (let index = 0; index < args.length; index += 1) { const arg = args[index]!; if (arg.startsWith(prefix)) result.push(arg.slice(prefix.length)); else if (arg === `--${name}` && args[index + 1]) result.push(args[++index]!) } return result.filter(value => value.trim()) }
-function help(): string { return ['Flowit Workflow', '', 'Commands:', '  flowit-workflow daemon --adapter=codex --instance=default --detach', '  flowit-workflow daemon --adapter=opencode --adapters=opencode,codex', '  flowit-workflow migrate --instance=default [--legacy-storage=/path/workflow.json ...]', '  flowit-workflow sessions --adapter=workbuddy', '  flowit-workflow bridge-hook workbuddy', '  flowit-workflow bridge-hook doubao-office', '  flowit-workflow ctl --adapter=opencode', '  flowit-workflow claude-hook'].join('\n') }
+function help(): string { return ['Flowit Workflow', '', 'Commands:', '  flowit-workflow setup [host|all] [--dry-run] [--json]', '  flowit-workflow doctor [host|all] [--json]', '  flowit-workflow repair <host|all> [--dry-run] [--yes]', '  flowit-workflow uninstall <host|all> [--dry-run] [--yes]', '  flowit-workflow daemon --adapter=codex --instance=default --detach', '  flowit-workflow daemon --adapter=opencode --adapters=opencode,codex', '  flowit-workflow migrate --instance=default [--legacy-storage=/path/workflow.json ...]', '  flowit-workflow sessions --adapter=workbuddy', '  flowit-workflow bridge-hook workbuddy', '  flowit-workflow bridge-hook doubao-office', '  flowit-workflow ctl --adapter=opencode', '  flowit-workflow claude-hook'].join('\n') }
