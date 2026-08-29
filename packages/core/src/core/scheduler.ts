@@ -3,6 +3,7 @@ import { advanceSchedule, createScheduleRecord } from './domain.js'
 import type { CreateScheduleInput, ScheduledTask } from './types.js'
 import { JsonWorkflowStore } from './store.js'
 import { OrchestrationDispatcher } from './dispatcher.js'
+import { PipelineRuntime } from './pipeline.js'
 import { startLeaseHeartbeat } from './lease.js'
 
 const MAX_TIMER_MS = 2_000_000_000
@@ -16,9 +17,15 @@ export class DurableScheduler {
   private reconcileTimer: ReturnType<typeof setInterval> | undefined
   private disposed = false
 
-  constructor(private readonly store: JsonWorkflowStore, private readonly dispatcher: OrchestrationDispatcher, private readonly minimumIntervalSeconds: number, private readonly defaultAdapterId: string, private readonly options: SchedulerRuntimeOptions, private readonly activeWorkers = true) {}
+  constructor(private readonly store: JsonWorkflowStore, private readonly dispatcher: OrchestrationDispatcher, private readonly pipelines: PipelineRuntime, private readonly minimumIntervalSeconds: number, private readonly defaultAdapterId: string, private readonly options: SchedulerRuntimeOptions, private readonly activeWorkers = true) {}
   async start(): Promise<void> { if (!this.activeWorkers) return; await this.reconcile(); this.reconcileTimer = setInterval(() => void this.reconcile().catch(() => undefined), DEFAULT_RECONCILE_MS) }
-  async create(input: CreateScheduleInput): Promise<ScheduledTask> { const task = createScheduleRecord(randomUUID(), input, new Date(), this.minimumIntervalSeconds, this.defaultAdapterId); await this.store.putSchedule(task); if (this.activeWorkers) this.arm(task); return task }
+  async create(input: CreateScheduleInput): Promise<ScheduledTask> {
+    if (typeof input.pipelineId === 'string') {
+      const pipeline = (await this.store.snapshot()).pipelines.find(candidate => candidate.id === input.pipelineId)
+      if (!pipeline) throw new Error(`unknown pipeline ${input.pipelineId}`)
+    }
+    const task = createScheduleRecord(randomUUID(), input, new Date(), this.minimumIntervalSeconds, this.defaultAdapterId); await this.store.putSchedule(task); if (this.activeWorkers) this.arm(task); return task
+  }
   async list(): Promise<ScheduledTask[]> { return (await this.store.snapshot()).schedules }
   async cancel(id: string): Promise<ScheduledTask> { const updated = await this.store.transact(state => { const index = state.schedules.findIndex(task => task.id === id); if (index < 0) throw new Error(`unknown schedule ${id}`); const current = state.schedules[index]!; const { nextRunAt: _nextRunAt, ...rest } = current; const next: ScheduledTask = { ...rest, status: 'cancelled', updatedAt: new Date().toISOString() }; state.schedules[index] = next; return next }); this.localControllers.get(id)?.abort(new Error(`schedule ${id} cancelled`)); this.clear(id); return updated }
   dispose(): void { this.disposed = true; if (this.reconcileTimer) clearInterval(this.reconcileTimer); this.reconcileTimer = undefined; for (const controller of this.localControllers.values()) controller.abort(new Error('scheduler disposed')); this.localControllers.clear(); for (const timer of this.timers.values()) clearTimeout(timer); this.timers.clear(); this.armedAt.clear() }
@@ -38,7 +45,11 @@ export class DurableScheduler {
     if (claim.kind === 'busy') return
     const controller = new AbortController(); this.localControllers.set(id, controller)
     const heartbeat = startLeaseHeartbeat(this.store, claim.run.id, this.options.workerId, this.options.leaseDurationMs, { kind: 'schedule', definitionId: id }); const signal = AbortSignal.any([controller.signal, heartbeat.signal])
-    try { await this.dispatcher.dispatchWithCorrelation(task.target, [], triggerKey, claim.run.attempt, signal); signal.throwIfAborted(); const completedAt = new Date(); await this.store.completeRun(claim.run.id, this.options.workerId, completedAt); await this.settleOccurrence(task, scheduledAt, triggerKey, 'completed', completedAt) }
+    try {
+      if (typeof task.pipelineId === 'string') await this.pipelines.runWithTrigger(task.pipelineId, triggerKey, signal)
+      else await this.dispatcher.dispatchWithCorrelation(task.target, [], triggerKey, claim.run.attempt, signal)
+      signal.throwIfAborted(); const completedAt = new Date(); await this.store.completeRun(claim.run.id, this.options.workerId, completedAt); await this.settleOccurrence(task, scheduledAt, triggerKey, 'completed', completedAt)
+    }
     catch (error: unknown) { const failedAt = new Date(); const message = error instanceof Error ? error.message : String(error); const deadLetter = claim.run.attempt >= this.options.maxAttempts; try { await this.store.failRun(claim.run.id, this.options.workerId, message, { retryDelayMs: this.options.retryDelayMs, deadLetter }, failedAt) } catch {} if (deadLetter) await this.settleOccurrence(task, scheduledAt, triggerKey, 'failed', failedAt) }
     finally { heartbeat.stop(); this.localControllers.delete(id) }
   }

@@ -243,6 +243,8 @@ See [`integrations/bridge/PROTOCOL.md`](integrations/bridge/PROTOCOL.md).
 - [Architecture and execution model](docs/architecture.md)
 - [AgentAdapter contract](docs/adapter-contract.md)
 - [Host adapter capabilities](docs/host-adapters.md)
+- [Host setup, doctor, repair, and uninstall](docs/setup.md)
+- [Built-in workflow presets](docs/presets.md)
 - [Claude Code pilot](docs/claude-code-pilot.md)
 - [Bridge protocol v2](integrations/bridge/PROTOCOL.md)
 
