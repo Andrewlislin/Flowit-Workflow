@@ -13,7 +13,7 @@
 
 **把你已经在使用的 AI Agent，从“一次性助手”变成可长期运行、可分工、可恢复的 AI 工作流。**
 
-[English](README.en.md) · [安装与修复](docs/setup.md) · [现成工作模式](docs/presets.md) · [技术架构](docs/architecture.md)
+**中文（默认）** · [English](README.en.md) · [安装与修复](docs/setup.md) · [现成工作模式](docs/presets.md) · [技术架构](docs/architecture.md)
 
 </div>
 
