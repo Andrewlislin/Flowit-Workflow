@@ -94,7 +94,6 @@ test('two workers observing one scheduled pipeline occurrence execute its node o
     { storageFile: file, defaultAdapterId: controlAdapter.id, activeWorkers: false },
     [controlAdapter],
   )
-  const at = new Date(Date.now() + 300).toISOString()
   const pipeline = await control.pipelines.create({
     name: 'scheduled pipeline',
     trigger: { kind: 'manual' },
@@ -111,6 +110,7 @@ test('two workers observing one scheduled pipeline occurrence execute its node o
     }],
     edges: [],
   })
+  const at = new Date(Date.now() + 300).toISOString()
   const schedule = await control.scheduler.create({
     name: 'scheduled pipeline occurrence',
     pipelineId: pipeline.id,
