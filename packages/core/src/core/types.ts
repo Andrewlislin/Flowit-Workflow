@@ -74,11 +74,20 @@ export interface AgentAdapter {
 }
 
 export type AutomationStatus = 'active' | 'paused' | 'completed' | 'cancelled' | 'failed'
-export type ScheduleTiming = { kind: 'at'; at: string } | { kind: 'every'; everySeconds: number }
-export interface ScheduledTask {
+export type CalendarDayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6
+export type ScheduleTiming =
+  | { kind: 'at'; at: string }
+  | { kind: 'every'; everySeconds: number }
+  | {
+      kind: 'calendar'
+      timeZone: string
+      hour: number
+      minute: number
+      daysOfWeek?: CalendarDayOfWeek[]
+    }
+interface ScheduledTaskBase {
   id: string
   name: string
-  target: AutomationTarget
   timing: ScheduleTiming
   status: AutomationStatus
   nextRunAt?: string
@@ -86,6 +95,15 @@ export interface ScheduledTask {
   createdAt: string
   updatedAt: string
 }
+export interface ScheduledAgentTask extends ScheduledTaskBase {
+  target: AutomationTarget
+  pipelineId?: never
+}
+export interface ScheduledPipelineTask extends ScheduledTaskBase {
+  pipelineId: string
+  target?: never
+}
+export type ScheduledTask = ScheduledAgentTask | ScheduledPipelineTask
 export interface PipelineNode {
   id: string
   target: AutomationTarget
@@ -185,11 +203,19 @@ export interface FlowitCoreConfig {
   maxPipelineAttempts?: number
   maxScheduleAttempts?: number
 }
-export interface CreateScheduleInput {
+interface CreateScheduleBaseInput {
   name: string
-  target: AutomationTarget
   timing: ScheduleTiming
 }
+export interface CreateAgentScheduleInput extends CreateScheduleBaseInput {
+  target: AutomationTarget
+  pipelineId?: never
+}
+export interface CreatePipelineScheduleInput extends CreateScheduleBaseInput {
+  pipelineId: string
+  target?: never
+}
+export type CreateScheduleInput = CreateAgentScheduleInput | CreatePipelineScheduleInput
 export interface CreatePipelineInput {
   name: string
   trigger: PipelineTrigger

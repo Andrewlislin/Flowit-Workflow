@@ -73,14 +73,6 @@ export class FlowitOrchestrationCore {
       config.defaultAdapterId,
     )
     const activeWorkers = config.activeWorkers ?? true
-    this.scheduler = new DurableScheduler(
-      this.store,
-      this.dispatcher,
-      minimumIntervalSeconds,
-      config.defaultAdapterId,
-      { workerId: this.workerId, leaseDurationMs, retryDelayMs, maxAttempts: maxScheduleAttempts },
-      activeWorkers,
-    )
     this.pipelines = new PipelineRuntime(
       this.adapters,
       this.store,
@@ -88,6 +80,15 @@ export class FlowitOrchestrationCore {
       this.contextGraph,
       config.defaultAdapterId,
       { workerId: this.workerId, leaseDurationMs, retryDelayMs, maxAttempts: maxPipelineAttempts },
+    )
+    this.scheduler = new DurableScheduler(
+      this.store,
+      this.dispatcher,
+      this.pipelines,
+      minimumIntervalSeconds,
+      config.defaultAdapterId,
+      { workerId: this.workerId, leaseDurationMs, retryDelayMs, maxAttempts: maxScheduleAttempts },
+      activeWorkers,
     )
     this.ready = this.initialize(activeWorkers, this.startupController.signal)
   }

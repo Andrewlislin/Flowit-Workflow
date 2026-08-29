@@ -1,4 +1,17 @@
-import type { AdapterId, AutomationTarget, CreatePipelineInput, CreateScheduleInput, PipelineDefinition, PipelineEdge, PipelineNode, PipelineTrigger, ScheduledTask, SessionContextRef } from './types.js'
+import type {
+  AdapterId,
+  AutomationTarget,
+  CalendarDayOfWeek,
+  CreatePipelineInput,
+  CreateScheduleInput,
+  PipelineDefinition,
+  PipelineEdge,
+  PipelineNode,
+  PipelineTrigger,
+  ScheduledTask,
+  ScheduleTiming,
+  SessionContextRef,
+} from './types.js'
 import { nonEmpty, normalizeStringList } from './utils.js'
 
 export { nonEmpty, normalizeStringList } from './utils.js'
@@ -33,17 +46,21 @@ export function normalizeTarget(target: AutomationTarget, defaultAdapterId: Adap
 
 export function createScheduleRecord(id: string, input: CreateScheduleInput, now: Date, minimumIntervalSeconds: number, defaultAdapterId: AdapterId): ScheduledTask {
   const createdAt = now.toISOString()
-  if (input.timing.kind === 'every') {
-    if (!Number.isSafeInteger(input.timing.everySeconds) || input.timing.everySeconds < minimumIntervalSeconds) throw new Error(`everySeconds must be an integer >= ${minimumIntervalSeconds}`)
-  } else {
-    const at = Date.parse(input.timing.at)
-    if (!Number.isFinite(at)) throw new Error('at must be a valid ISO timestamp')
-    if (at <= now.getTime()) throw new Error('at must be in the future')
+  const timing = normalizeScheduleTiming(input.timing, now, minimumIntervalSeconds)
+  const nextRunAt = nextScheduleOccurrence(timing, now)
+  const base = {
+    id,
+    name: nonEmpty(input.name, 'name'),
+    timing,
+    status: 'active' as const,
+    nextRunAt,
+    createdAt,
+    updatedAt: createdAt,
   }
-  const target = normalizeTarget(input.target, defaultAdapterId)
-  const timing = input.timing.kind === 'at' ? { kind: 'at' as const, at: new Date(input.timing.at).toISOString() } : { kind: 'every' as const, everySeconds: input.timing.everySeconds }
-  const nextRunAt = timing.kind === 'at' ? timing.at : new Date(now.getTime() + timing.everySeconds * 1000).toISOString()
-  return { id, name: nonEmpty(input.name, 'name'), target, timing, status: 'active', nextRunAt, createdAt, updatedAt: createdAt }
+  if (typeof input.pipelineId === 'string') {
+    return { ...base, pipelineId: nonEmpty(input.pipelineId, 'pipelineId') }
+  }
+  return { ...base, target: normalizeTarget(input.target, defaultAdapterId) }
 }
 
 export function advanceSchedule(task: ScheduledTask, firedAt: Date, oneShotOutcome: 'completed' | 'failed' = 'completed'): ScheduledTask {
@@ -52,11 +69,164 @@ export function advanceSchedule(task: ScheduledTask, firedAt: Date, oneShotOutco
     const { nextRunAt: _nextRunAt, ...rest } = task
     return { ...rest, status: oneShotOutcome, lastRunAt: now, updatedAt: now }
   }
-  const intervalMs = task.timing.everySeconds * 1000
-  const previous = task.nextRunAt ? Date.parse(task.nextRunAt) : firedAt.getTime()
-  let next = Number.isFinite(previous) ? previous + intervalMs : firedAt.getTime() + intervalMs
-  while (next <= firedAt.getTime()) next += intervalMs
-  return { ...task, lastRunAt: now, nextRunAt: new Date(next).toISOString(), updatedAt: now }
+  const nextRunAt = nextScheduleOccurrence(task.timing, firedAt, task.nextRunAt)
+  return { ...task, lastRunAt: now, nextRunAt, updatedAt: now }
+}
+
+export function nextCalendarOccurrence(
+  timing: Extract<ScheduleTiming, { kind: 'calendar' }>,
+  after: Date,
+): string {
+  const base = zonedParts(after, timing.timeZone)
+  const allowed = timing.daysOfWeek ? new Set(timing.daysOfWeek) : undefined
+  for (let offset = 0; offset <= 370; offset += 1) {
+    const date = new Date(Date.UTC(base.year, base.month - 1, base.day + offset))
+    const dayOfWeek = date.getUTCDay() as CalendarDayOfWeek
+    if (allowed && !allowed.has(dayOfWeek)) continue
+    const candidate = localDateTimeToInstant(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      date.getUTCDate(),
+      timing.hour,
+      timing.minute,
+      timing.timeZone,
+    )
+    if (candidate && candidate.getTime() > after.getTime()) return candidate.toISOString()
+  }
+  throw new Error(`calendar schedule could not resolve a future occurrence in ${timing.timeZone}`)
+}
+
+function normalizeScheduleTiming(
+  timing: ScheduleTiming,
+  now: Date,
+  minimumIntervalSeconds: number,
+): ScheduleTiming {
+  if (timing.kind === 'at') {
+    const at = Date.parse(timing.at)
+    if (!Number.isFinite(at)) throw new Error('at must be a valid ISO timestamp')
+    if (at <= now.getTime()) throw new Error('at must be in the future')
+    return { kind: 'at', at: new Date(timing.at).toISOString() }
+  }
+  if (timing.kind === 'every') {
+    if (!Number.isSafeInteger(timing.everySeconds) || timing.everySeconds < minimumIntervalSeconds) {
+      throw new Error(`everySeconds must be an integer >= ${minimumIntervalSeconds}`)
+    }
+    return { kind: 'every', everySeconds: timing.everySeconds }
+  }
+  const timeZone = nonEmpty(timing.timeZone, 'timeZone')
+  assertTimeZone(timeZone)
+  if (!Number.isSafeInteger(timing.hour) || timing.hour < 0 || timing.hour > 23) {
+    throw new Error('calendar hour must be an integer between 0 and 23')
+  }
+  if (!Number.isSafeInteger(timing.minute) || timing.minute < 0 || timing.minute > 59) {
+    throw new Error('calendar minute must be an integer between 0 and 59')
+  }
+  const days = timing.daysOfWeek === undefined
+    ? undefined
+    : [...new Set(timing.daysOfWeek)].sort((left, right) => left - right)
+  if (days?.length === 0 || days?.some(day => !Number.isSafeInteger(day) || day < 0 || day > 6)) {
+    throw new Error('calendar daysOfWeek must contain one or more integers from 0 (Sunday) through 6 (Saturday)')
+  }
+  return {
+    kind: 'calendar',
+    timeZone,
+    hour: timing.hour,
+    minute: timing.minute,
+    ...(days ? { daysOfWeek: days as CalendarDayOfWeek[] } : {}),
+  }
+}
+
+function nextScheduleOccurrence(timing: ScheduleTiming, after: Date, previous?: string): string {
+  if (timing.kind === 'at') return timing.at
+  if (timing.kind === 'calendar') return nextCalendarOccurrence(timing, after)
+  const intervalMs = timing.everySeconds * 1000
+  const prior = previous ? Date.parse(previous) : Number.NaN
+  let next = Number.isFinite(prior) ? prior + intervalMs : after.getTime() + intervalMs
+  while (next <= after.getTime()) next += intervalMs
+  return new Date(next).toISOString()
+}
+
+interface ZonedParts {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+}
+
+function zonedParts(date: Date, timeZone: string): ZonedParts {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  })
+  const parts = Object.fromEntries(
+    formatter.formatToParts(date)
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, Number(part.value)]),
+  ) as Record<string, number>
+  const required = ['year', 'month', 'day', 'hour', 'minute', 'second'] as const
+  if (required.some(key => !Number.isFinite(parts[key]))) {
+    throw new Error(`failed to resolve calendar time in ${timeZone}`)
+  }
+  return {
+    year: parts.year!,
+    month: parts.month!,
+    day: parts.day!,
+    hour: parts.hour!,
+    minute: parts.minute!,
+    second: parts.second!,
+  }
+}
+
+function localDateTimeToInstant(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): Date | undefined {
+  const target = Date.UTC(year, month - 1, day, hour, minute, 0)
+  let candidate = target
+  for (let iteration = 0; iteration < 6; iteration += 1) {
+    const observed = zonedParts(new Date(candidate), timeZone)
+    const represented = Date.UTC(
+      observed.year,
+      observed.month - 1,
+      observed.day,
+      observed.hour,
+      observed.minute,
+      observed.second,
+    )
+    const delta = target - represented
+    if (delta === 0) break
+    candidate += delta
+  }
+  const result = new Date(candidate)
+  const observed = zonedParts(result, timeZone)
+  return observed.year === year
+    && observed.month === month
+    && observed.day === day
+    && observed.hour === hour
+    && observed.minute === minute
+    && observed.second === 0
+    ? result
+    : undefined
+}
+
+function assertTimeZone(timeZone: string): void {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone }).format(new Date(0))
+  } catch {
+    throw new Error(`invalid IANA time zone: ${timeZone}`)
+  }
 }
 
 export function normalizeTrigger(trigger: PipelineTrigger, defaultAdapterId: AdapterId): PipelineTrigger {

@@ -1,4 +1,5 @@
 import type { AutomationTarget, CreatePipelineInput, PipelineNode } from '../core/types.js'
+import { runtimeAdapterIdForSetupHost } from '../setup/catalog.js'
 import type { PresetDefinition, PresetRenderRequest, PresetRoleBinding } from './types.js'
 
 export const BUILT_IN_PRESETS = [
@@ -137,7 +138,7 @@ function requireBinding(request: PresetRenderRequest, roleId: string): PresetRol
 
 function target(binding: PresetRoleBinding, prompt: string): AutomationTarget {
   return {
-    adapterId: binding.adapterId,
+    adapterId: runtimeAdapterIdForSetupHost(binding.adapterId),
     sessionId: binding.sessionId,
     prompt,
     skills: [...binding.skills],

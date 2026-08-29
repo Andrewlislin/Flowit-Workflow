@@ -1,15 +1,18 @@
 import { mkdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createScheduleRecord } from '../core/domain.js'
 import { FlowitOrchestrationCore } from '../core/runtime.js'
-import type { CreatePipelineInput, PipelineDefinition } from '../core/types.js'
+import type { CreatePipelineInput, PipelineDefinition, ScheduledTask, ScheduleTiming } from '../core/types.js'
 import { defaultStoragePath, isBuiltInAdapterId, resolveConfiguredRuntime } from '../runtime-factory.js'
 import { knownSetupHost } from '../setup/catalog.js'
 import type { PresetRegistry } from './registry.js'
 import type {
   AppliedPresetInstall,
   PreparedPresetInstall,
+  PreparedPresetSchedule,
   PresetRoleBinding,
+  PresetScheduleMode,
 } from './types.js'
 
 export interface PresetInstallOptions {
@@ -26,6 +29,11 @@ export interface PresetInstallOptions {
   readonly projectDir: string
   readonly instanceId?: string
   readonly storageFile?: string
+  readonly scheduleMode?: PresetScheduleMode
+  readonly scheduleName?: string
+  readonly scheduleTime?: string
+  readonly timeZone?: string
+  readonly everySeconds?: number
 }
 
 export interface PresetInstallRuntime {
@@ -62,6 +70,7 @@ export async function preparePresetInstall(
     boundAdapters,
     runtime,
   )
+  const requestedSchedule = resolveRequestedSchedule(options, pipelineName)
 
   const common = {
     kind: 'preset-install-plan' as const,
@@ -78,7 +87,7 @@ export async function preparePresetInstall(
   }
 
   if (missingRoles.length > 0 || (preset.inputRequired && !options.input?.trim()) || warnings.some(row => /cannot share a runnable/.test(row))) {
-    return { ...common, action: 'incomplete' }
+    return { ...common, action: 'incomplete', schedule: { ...requestedSchedule, action: 'none' } }
   }
 
   if (!defaultAdapterId) throw new Error('preset install requires --adapter or per-role adapter bindings')
@@ -89,6 +98,13 @@ export async function preparePresetInstall(
     bindings,
   })
   const existing = await inspectExistingPipeline(storage, defaultAdapterId, pipeline)
+  if (existing && requestedSchedule.mode !== 'manual') ensureActivatablePipeline(existing)
+  const schedule = await prepareSchedulePlan(
+    storage,
+    defaultAdapterId,
+    requestedSchedule,
+    existing?.id,
+  )
   return {
     ...common,
     defaultAdapterId,
@@ -96,6 +112,7 @@ export async function preparePresetInstall(
     action: existing ? 'reuse' : 'create',
     ...(existing ? { existingPipelineId: existing.id } : {}),
     pipeline,
+    schedule,
   }
 }
 
@@ -103,7 +120,9 @@ export async function applyPresetInstall(plan: PreparedPresetInstall): Promise<A
   if (plan.action === 'incomplete' || !plan.pipeline || !plan.defaultAdapterId) {
     throw new Error(`preset ${plan.preset.id} install plan is incomplete; review missing roles/input before applying`)
   }
-  await mkdir(plan.workspace, { recursive: true })
+  const requestedSchedule = plan.schedule.mode === 'manual' || !plan.schedule.timing
+    ? undefined
+    : validateScheduleRequest(plan.schedule, plan.defaultAdapterId)
   const core = new FlowitOrchestrationCore({
     storageFile: plan.storageFile,
     legacyStorageFiles: [...plan.legacyStorageFiles],
@@ -119,12 +138,148 @@ export async function applyPresetInstall(plan: PreparedPresetInstall): Promise<A
         `pipeline name ${JSON.stringify(plan.pipelineName)} is already used by a different or ambiguous definition; choose --name to avoid replacing user work`,
       )
     }
-    if (exact.length === 1) return result(plan, 'reused', exact[0]!.id)
-    const created = await core.pipelines.create(plan.pipeline)
-    return result(plan, 'created', created.id)
+    if (requestedSchedule && exact.length === 1) ensureActivatablePipeline(exact[0]!)
+
+    if (requestedSchedule?.timing) {
+      const sameScheduleName = (await core.scheduler.list()).filter(task => task.name === requestedSchedule.scheduleName)
+      if (exact.length === 0) {
+        if (sameScheduleName.length > 0) throwScheduleNameConflict(requestedSchedule.scheduleName)
+      } else {
+        const exactSchedules = sameScheduleName.filter(task => scheduleEquivalent(task, exact[0]!.id, requestedSchedule.timing!))
+        if (sameScheduleName.length > 0 && exactSchedules.length !== 1) {
+          throwScheduleNameConflict(requestedSchedule.scheduleName)
+        }
+        if (exactSchedules.length === 1) ensureReusableSchedule(exactSchedules[0]!)
+      }
+    }
+
+    await mkdir(plan.workspace, { recursive: true })
+    const pipeline = exact.length === 1 ? exact[0]! : await core.pipelines.create(plan.pipeline)
+    const pipelineAction = exact.length === 1 ? 'reused' as const : 'created' as const
+
+    if (!requestedSchedule?.timing) {
+      return result(plan, pipelineAction, pipeline.id, 'none')
+    }
+
+    const sameScheduleName = (await core.scheduler.list()).filter(task => task.name === requestedSchedule.scheduleName)
+    const exactSchedules = sameScheduleName.filter(task => scheduleEquivalent(task, pipeline.id, requestedSchedule.timing!))
+    if (sameScheduleName.length > 0 && exactSchedules.length !== 1) {
+      throwScheduleNameConflict(requestedSchedule.scheduleName)
+    }
+    if (exactSchedules.length === 1) {
+      const schedule = exactSchedules[0]!
+      ensureReusableSchedule(schedule)
+      return result(plan, pipelineAction, pipeline.id, 'reused', schedule)
+    }
+    const schedule = await core.scheduler.create({
+      name: requestedSchedule.scheduleName,
+      pipelineId: pipeline.id,
+      timing: requestedSchedule.timing,
+    })
+    return result(plan, pipelineAction, pipeline.id, 'created', schedule)
   } finally {
     await core.dispose()
   }
+}
+
+function resolveRequestedSchedule(
+  options: PresetInstallOptions,
+  pipelineName: string,
+): Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'> {
+  const mode = options.scheduleMode ?? 'manual'
+  const scheduleName = options.scheduleName?.trim() || `${pipelineName} schedule`
+  if (mode === 'manual') return { mode, scheduleName }
+  if (mode === 'every') {
+    if (!Number.isSafeInteger(options.everySeconds) || (options.everySeconds ?? 0) < 60) {
+      throw new Error('--schedule=every requires --every-seconds=<integer >= 60>')
+    }
+    return { mode, scheduleName, timing: { kind: 'every', everySeconds: options.everySeconds! } }
+  }
+  const { hour, minute } = parseClockTime(options.scheduleTime)
+  const timeZone = options.timeZone?.trim() || systemTimeZone()
+  return {
+    mode,
+    scheduleName,
+    timing: {
+      kind: 'calendar',
+      timeZone,
+      hour,
+      minute,
+      ...(mode === 'weekdays' ? { daysOfWeek: [1, 2, 3, 4, 5] } : {}),
+    },
+  }
+}
+
+async function prepareSchedulePlan(
+  storage: { storageFile: string; legacyStorageFiles: string[]; instanceId: string },
+  defaultAdapterId: string,
+  requested: Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'>,
+  existingPipelineId?: string,
+): Promise<PreparedPresetSchedule> {
+  if (requested.mode === 'manual' || !requested.timing) return { ...requested, action: 'none' }
+  const validated = validateScheduleRequest(requested, defaultAdapterId)
+  const core = new FlowitOrchestrationCore({
+    storageFile: storage.storageFile,
+    legacyStorageFiles: storage.legacyStorageFiles,
+    defaultAdapterId,
+    activeWorkers: false,
+  })
+  try {
+    await core.ready
+    const sameName = (await core.scheduler.list()).filter(task => task.name === validated.scheduleName)
+    if (!existingPipelineId) {
+      if (sameName.length > 0) throwScheduleNameConflict(validated.scheduleName)
+      return { ...validated, action: 'create' }
+    }
+    const exact = sameName.filter(task => scheduleEquivalent(task, existingPipelineId, validated.timing!))
+    if (sameName.length === 0) return { ...validated, action: 'create' }
+    if (sameName.length === 1 && exact.length === 1) {
+      ensureReusableSchedule(exact[0]!)
+      return { ...validated, action: 'reuse', existingScheduleId: exact[0]!.id }
+    }
+    throwScheduleNameConflict(validated.scheduleName)
+  } finally {
+    await core.dispose()
+  }
+}
+
+function validateScheduleRequest(
+  requested: Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'>,
+  defaultAdapterId: string,
+): Omit<PreparedPresetSchedule, 'action' | 'existingScheduleId'> {
+  if (requested.mode === 'manual' || !requested.timing) return requested
+  const validated = createScheduleRecord(
+    'preset-schedule-preflight',
+    {
+      name: requested.scheduleName,
+      pipelineId: 'preset-pipeline-preflight',
+      timing: requested.timing,
+    },
+    new Date(),
+    60,
+    defaultAdapterId,
+  )
+  return { ...requested, timing: validated.timing }
+}
+
+function ensureActivatablePipeline(pipeline: PipelineDefinition): void {
+  if (pipeline.status === 'active') return
+  throw new Error(
+    `pipeline ${JSON.stringify(pipeline.name)} matches the preset but is ${pipeline.status}; reactivate it explicitly before enabling preset scheduling`,
+  )
+}
+
+function ensureReusableSchedule(schedule: ScheduledTask): void {
+  if (schedule.status === 'active' && schedule.nextRunAt) return
+  throw new Error(
+    `schedule ${JSON.stringify(schedule.name)} matches the requested activation but is ${schedule.status}; reactivate it explicitly or choose a different --schedule-name`,
+  )
+}
+
+function throwScheduleNameConflict(scheduleName: string): never {
+  throw new Error(
+    `schedule name ${JSON.stringify(scheduleName)} is already used by a different or ambiguous definition; choose --schedule-name to preserve existing automation`,
+  )
 }
 
 function resolveBindings(
@@ -225,6 +380,12 @@ function pipelineEquivalent(existing: PipelineDefinition, desired: CreatePipelin
   }) === canonicalJson(desired)
 }
 
+function scheduleEquivalent(existing: ScheduledTask, pipelineId: string, timing: ScheduleTiming): boolean {
+  return typeof existing.pipelineId === 'string'
+    && existing.pipelineId === pipelineId
+    && canonicalJson(existing.timing) === canonicalJson(timing)
+}
+
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item)).join(',')}]`
   if (value && typeof value === 'object') {
@@ -250,6 +411,8 @@ function result(
   plan: PreparedPresetInstall,
   action: 'created' | 'reused',
   pipelineId: string,
+  scheduleAction: 'none' | 'created' | 'reused',
+  schedule?: ScheduledTask,
 ): AppliedPresetInstall {
   return {
     kind: 'preset-install-result',
@@ -257,11 +420,30 @@ function result(
     action,
     pipelineId,
     pipelineName: plan.pipelineName,
+    scheduleAction,
+    ...(schedule ? { scheduleId: schedule.id } : {}),
+    ...(schedule?.nextRunAt ? { nextRunAt: schedule.nextRunAt } : {}),
     storageFile: plan.storageFile,
     instanceId: plan.instanceId,
     workspace: plan.workspace,
     warnings: plan.warnings,
   }
+}
+
+function parseClockTime(value: string | undefined): { hour: number; minute: number } {
+  if (!value?.trim()) throw new Error('--schedule=daily or weekdays requires --time=HH:MM')
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim())
+  if (!match) throw new Error('--time must use 24-hour HH:MM format')
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  if (!Number.isSafeInteger(hour) || hour < 0 || hour > 23 || !Number.isSafeInteger(minute) || minute < 0 || minute > 59) {
+    throw new Error('--time must be a valid 24-hour clock time')
+  }
+  return { hour, minute }
+}
+
+function systemTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 }
 
 function normalizeInstanceId(value: string): string {
