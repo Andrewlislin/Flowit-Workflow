@@ -41,7 +41,7 @@ A provider supplies:
 
 Every concrete provider must preserve these rules:
 
-1. Parse and merge existing configuration rather than overwrite it.
+1. Parse/merge or surgically edit existing configuration rather than overwrite unrelated settings.
 2. Support repeated setup runs without duplicating managed entries.
 3. Record enough ownership to make repair and uninstall conservative.
 4. Revalidate ownership and current configuration before applying a previously generated plan.
@@ -120,13 +120,58 @@ The first install seeds ownership before creating managed plugin files. This mak
 
 After setup, repair, or uninstall, restart Claude Code or run `/reload-plugins` to reload plugin components.
 
+## Codex provider
+
+Codex is configured through its native TOML MCP surface:
+
+```bash
+flowit-workflow setup codex --dry-run
+flowit-workflow setup codex
+flowit-workflow setup codex --yes --json
+flowit-workflow doctor codex
+flowit-workflow repair codex --dry-run
+```
+
+User scope writes only one Flowit-owned block in `${CODEX_HOME:-~/.codex}/config.toml`. Project scope writes the same block in `<project>/.codex/config.toml`; Codex itself loads project-local configuration only after the project is trusted, and Flowit does not bypass that host gate.
+
+The installer does **not** parse and reserialize the whole TOML document. It preserves all unrelated bytes/comments/order and manages only a marked block:
+
+```toml
+# >>> flowit-workflow setup codex v1
+[mcp_servers.flowit-workflow]
+command = "/path/to/node"
+args = ["/path/to/flowit-workflow/dist/mcp-server.js"]
+enabled = true
+
+[mcp_servers.flowit-workflow.env]
+FLOWIT_WORKFLOW_ADAPTER = "codex"
+FLOWIT_WORKFLOW_MUTATIONS = "1"
+# <<< flowit-workflow setup codex v1
+```
+
+This matches Codex's stdio MCP shape (`command`, `args`, `env`) while keeping the rest of `config.toml` outside Flowit's ownership boundary. If an unmanaged `[mcp_servers.flowit-workflow]` table already exists, setup fails closed instead of replacing it.
+
+### Codex ownership and repair
+
+A separate ownership manifest records the managed block hash, target config path, scope, and whether the config file existed before Flowit setup. Apply rechecks the whole target config snapshot after `--dry-run`, so concurrent/unrelated edits cause a stale-plan failure rather than being silently overwritten.
+
+If the managed block disappears but ownership remains, `repair` restores it. If a user modifies the managed block, automatic repair/uninstall preserves that block and reports a conflict/partial cleanup instead of reclaiming user edits.
+
+`CODEX_HOME` is honored for user scope. Project-scoped setup emits a portability warning when the generated MCP block points to a Flowit installation outside the project.
+
+### Codex uninstall semantics
+
+`flowit-workflow uninstall codex` removes only the marker-bounded block when its current hash still matches the ownership manifest. Unrelated TOML remains byte-for-byte intact. If Flowit originally created an otherwise-empty `config.toml`, uninstall removes that file; a pre-existing config file is retained even if it becomes empty again.
+
+Restart Codex or start a new thread after setup/repair/uninstall so MCP configuration is reloaded.
+
 ## Current rollout state
 
 The known catalog includes:
 
 - WorkBuddy — provider implemented;
 - Claude Code — provider implemented;
-- Codex — provider pending;
+- Codex — provider implemented;
 - OpenCode — provider pending;
 - DeepSeek Harness — provider pending;
 - 豆包办公 — provider pending.
