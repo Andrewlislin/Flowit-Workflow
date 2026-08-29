@@ -13,7 +13,7 @@
 
 **Turn the AI agents you already use into durable, repeatable workflows.**
 
-[中文](README.md) · [Setup](docs/setup.md) · [Presets](docs/presets.md) · [Architecture](docs/architecture.md)
+[中文（默认）](README.md) · **English** · [Setup](docs/setup.md) · [Presets](docs/presets.md) · [Architecture](docs/architecture.md)
 
 </div>
 
