@@ -27,6 +27,8 @@ jobs:
         run: pnpm build
       - name: Package tarball smoke test
         run: pnpm check:pack
+      - name: Release artifact coherence
+        run: pnpm check:release
       - name: OpenCode SDK supply-chain contract
         run: pnpm test:opencode-contract
       - name: Typecheck compatibility distribution
