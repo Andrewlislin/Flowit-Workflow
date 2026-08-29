@@ -1,5 +1,6 @@
 import { ClaudeCodeSetupProvider } from './providers/claude-code.js'
 import { CodexSetupProvider } from './providers/codex.js'
+import { DshSetupProvider } from './providers/dsh.js'
 import { OpenCodeSetupProvider } from './providers/opencode.js'
 import { WorkBuddySetupProvider } from './providers/workbuddy.js'
 import type { HostDetection, HostSetupContext, HostSetupProvider, SetupHostId } from './types.js'
@@ -62,6 +63,7 @@ export function createDefaultHostSetupRegistry(
     new ClaudeCodeSetupProvider(),
     new CodexSetupProvider(),
     new OpenCodeSetupProvider(),
+    new DshSetupProvider(),
     ...providers,
   ])
 }
