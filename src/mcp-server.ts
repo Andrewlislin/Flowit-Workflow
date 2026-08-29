@@ -23,7 +23,7 @@ async function handle(line: string): Promise<void> {
 }
 async function dispatch(request: JsonRpcRequest): Promise<unknown> {
   switch (request.method) {
-    case 'initialize': return { protocolVersion: typeof request.params?.protocolVersion === 'string' ? request.params.protocolVersion : '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'flowit-workflow', version: '0.4.0' } }
+    case 'initialize': return { protocolVersion: typeof request.params?.protocolVersion === 'string' ? request.params.protocolVersion : '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'flowit-workflow', version: '0.5.0-beta.1' } }
     case 'ping': return {}
     case 'tools/list': return { tools: tools() }
     case 'tools/call': {
