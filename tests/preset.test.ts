@@ -137,7 +137,7 @@ test('research-lab requires an explicit research question', async () => {
     }, createDefaultPresetRegistry(), { cwd: root, homeDir: root, env: {} })
     assert.equal(plan.action, 'incomplete')
     assert.equal(plan.missingRoles.length, 0)
-    assert.equal(plan.warnings.some(warning => /requires Research question/i.test(warning)), true)
+    assert.equal(plan.warnings.some(warning => /requires .*研究问题/i.test(warning)), true)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
