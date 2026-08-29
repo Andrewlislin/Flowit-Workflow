@@ -1,5 +1,12 @@
 import type { FlowitOrchestrationCore } from './core/runtime.js'
 import type { AutomationTarget, CreatePipelineInput, CreateScheduleInput } from './core/types.js'
+import {
+  assessTask,
+  commitPreparedWorkflow,
+  prepareWorkflow,
+  type PrepareWorkflowInput,
+  type TaskAssessmentInput,
+} from './routing/index.js'
 
 export type ControlRequest =
   | { op: 'state' }
@@ -12,6 +19,15 @@ export type ControlRequest =
   | { op: 'pipeline.create'; input: CreatePipelineInput }
   | { op: 'pipeline.run'; id: string }
   | { op: 'pipeline.status'; id: string; status: 'active' | 'paused' }
+  | { op: 'workflow.assess'; input: TaskAssessmentInput }
+  | { op: 'workflow.prepare'; input: PrepareWorkflowInput }
+  | {
+      op: 'workflow.commit'
+      proposal: unknown
+      expectedHash: string
+      confirmed?: boolean
+      runNow?: boolean
+    }
 
 export async function executeControl(core: FlowitOrchestrationCore, request: ControlRequest): Promise<unknown> {
   await core.ready
@@ -32,6 +48,20 @@ export async function executeControl(core: FlowitOrchestrationCore, request: Con
     case 'pipeline.create': return core.pipelines.create(request.input)
     case 'pipeline.run': await core.pipelines.run(request.id); return { id: request.id, completed: true }
     case 'pipeline.status': return core.pipelines.setStatus(request.id, request.status)
-    default: { const exhaustive: never = request; throw new Error(`unknown control request: ${JSON.stringify(exhaustive)}`) }
+    case 'workflow.assess': return assessTask(request.input)
+    case 'workflow.prepare': return prepareWorkflow(request.input)
+    case 'workflow.commit': return commitPreparedWorkflow(
+      core,
+      request.proposal,
+      request.expectedHash,
+      {
+        ...(request.confirmed !== undefined ? { confirmed: request.confirmed } : {}),
+        ...(request.runNow !== undefined ? { runNow: request.runNow } : {}),
+      },
+    )
+    default: {
+      const exhaustive: never = request
+      throw new Error(`unknown control request: ${JSON.stringify(exhaustive)}`)
+    }
   }
 }

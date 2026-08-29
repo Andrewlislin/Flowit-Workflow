@@ -20,6 +20,7 @@ export const CLAUDE_CODE_MANAGED_FILES = [
   '.claude-plugin/plugin.json',
   'skills/run-bound/SKILL.md',
   'skills/orchestrate/SKILL.md',
+  'skills/route/SKILL.md',
   'hooks/hooks.json',
   '.mcp.json',
 ] as const
@@ -33,6 +34,7 @@ export interface ClaudeCodeSetupPaths {
   readonly sourcePluginManifestFile: string
   readonly sourceRunBoundSkillFile: string
   readonly sourceOrchestrateSkillFile: string
+  readonly sourceRouteSkillFile: string
   readonly mcpServerFile: string
   readonly cliFile: string
 }
@@ -83,6 +85,7 @@ export async function inspectClaudeCodeState(
     assertReadable(paths.sourcePluginManifestFile, 'packaged Claude Code plugin manifest'),
     assertReadable(paths.sourceRunBoundSkillFile, 'packaged Claude run-bound Skill'),
     assertReadable(paths.sourceOrchestrateSkillFile, 'packaged Claude orchestrate Skill'),
+    assertReadable(paths.sourceRouteSkillFile, 'packaged Claude adaptive routing Skill'),
     assertReadable(paths.mcpServerFile, 'Flowit MCP server build artifact'),
     assertReadable(paths.cliFile, 'Flowit CLI build artifact'),
   ])
@@ -139,6 +142,7 @@ export function claudeCodeSetupPaths(
     sourcePluginManifestFile: path.join(context.packageRoot, '.claude-plugin', 'plugin.json'),
     sourceRunBoundSkillFile: path.join(context.packageRoot, 'skills', 'run-bound', 'SKILL.md'),
     sourceOrchestrateSkillFile: path.join(context.packageRoot, 'skills', 'orchestrate', 'SKILL.md'),
+    sourceRouteSkillFile: path.join(context.packageRoot, 'skills', 'route', 'SKILL.md'),
     mcpServerFile: path.join(context.packageRoot, 'dist', 'mcp-server.js'),
     cliFile: path.join(context.packageRoot, 'dist', 'cli.js'),
   }
@@ -258,11 +262,12 @@ function claudeCodeConflicts(
 async function desiredClaudePluginFiles(
   paths: ClaudeCodeSetupPaths,
 ): Promise<Record<ClaudeCodeManagedFile, string>> {
-  const [packageRaw, pluginRaw, runBound, orchestrate] = await Promise.all([
+  const [packageRaw, pluginRaw, runBound, orchestrate, route] = await Promise.all([
     readFile(paths.packageManifestFile, 'utf8'),
     readFile(paths.sourcePluginManifestFile, 'utf8'),
     readFile(paths.sourceRunBoundSkillFile, 'utf8'),
     readFile(paths.sourceOrchestrateSkillFile, 'utf8'),
+    readFile(paths.sourceRouteSkillFile, 'utf8'),
   ])
   const packageManifest = parseJsonObject(packageRaw, paths.packageManifestFile)
   const sourcePlugin = parseJsonObject(pluginRaw, paths.sourcePluginManifestFile)
@@ -301,6 +306,7 @@ async function desiredClaudePluginFiles(
     '.claude-plugin/plugin.json': `${JSON.stringify(pluginManifest, null, 2)}\n`,
     'skills/run-bound/SKILL.md': runBound,
     'skills/orchestrate/SKILL.md': orchestrate,
+    'skills/route/SKILL.md': route,
     'hooks/hooks.json': `${JSON.stringify(hooks, null, 2)}\n`,
     '.mcp.json': `${JSON.stringify(mcp, null, 2)}\n`,
   }

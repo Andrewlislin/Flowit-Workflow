@@ -32,6 +32,7 @@ async function fixture(withClaude = true): Promise<Fixture> {
     mkdir(path.join(packageRoot, '.claude-plugin'), { recursive: true }),
     mkdir(path.join(packageRoot, 'skills', 'run-bound'), { recursive: true }),
     mkdir(path.join(packageRoot, 'skills', 'orchestrate'), { recursive: true }),
+    mkdir(path.join(packageRoot, 'skills', 'route'), { recursive: true }),
     mkdir(path.join(packageRoot, 'dist'), { recursive: true }),
     mkdir(bin, { recursive: true }),
   ])
@@ -40,6 +41,7 @@ async function fixture(withClaude = true): Promise<Fixture> {
     writeFile(path.join(packageRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'flowit-workflow', version: '0.2.0', description: 'fixture' }), 'utf8'),
     writeFile(path.join(packageRoot, 'skills', 'run-bound', 'SKILL.md'), '---\nname: run-bound\n---\nrun bound\n', 'utf8'),
     writeFile(path.join(packageRoot, 'skills', 'orchestrate', 'SKILL.md'), '---\nname: orchestrate\n---\norchestrate\n', 'utf8'),
+    writeFile(path.join(packageRoot, 'skills', 'route', 'SKILL.md'), '---\ndescription: adaptive route\n---\nroute\n', 'utf8'),
     writeFile(path.join(packageRoot, 'dist', 'mcp-server.js'), 'export {}\n', 'utf8'),
     writeFile(path.join(packageRoot, 'dist', 'cli.js'), 'export {}\n', 'utf8'),
   ])
@@ -100,6 +102,7 @@ test('Claude Code user setup installs a self-contained skills-directory plugin f
     assert.equal(plan.actions[0]?.id, 'write-manifest')
     assert.equal(plan.actions.some(action => action.id === 'write:.mcp.json'), true)
     assert.equal(plan.actions.some(action => action.id === 'write:hooks/hooks.json'), true)
+    assert.equal(plan.actions.some(action => action.id === 'write:skills/route/SKILL.md'), true)
     assert.equal(plan.actions.every(action => action.requiresConfirmation), true)
 
     const result = await provider.applySetup(fx.context, plan, { ...fx.userOptions, assumeYes: true })
@@ -126,6 +129,7 @@ test('Claude Code user setup installs a self-contained skills-directory plugin f
     )
     assert.equal(await readFile(path.join(pluginRoot, 'skills', 'run-bound', 'SKILL.md'), 'utf8'), '---\nname: run-bound\n---\nrun bound\n')
     assert.equal(await readFile(path.join(pluginRoot, 'skills', 'orchestrate', 'SKILL.md'), 'utf8'), '---\nname: orchestrate\n---\norchestrate\n')
+    assert.equal(await readFile(path.join(pluginRoot, 'skills', 'route', 'SKILL.md'), 'utf8'), '---\ndescription: adaptive route\n---\nroute\n')
     assert.equal(await exists(path.join(fx.home, '.flowit-workflow', 'claude')), true)
   } finally {
     await rm(fx.root, { recursive: true, force: true })

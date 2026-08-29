@@ -1,5 +1,5 @@
 ---
-description: Manage Flowit Workflow sessions, schedules, pipelines, Skill bindings, and context flow from Claude Code.
+description: Manage Flowit Workflow sessions, schedules, pipelines, adaptive proposals, Skill bindings, and context flow from Claude Code.
 disable-model-invocation: true
 ---
 
@@ -12,6 +12,8 @@ Read-only tools are available by default:
 - `sessions_list`
 - `schedule_list`
 - `pipeline_list`
+- `workflow_assess`
+- `workflow_prepare`
 
 Mutation tools are deliberately absent unless the user starts Claude Code with:
 
@@ -27,6 +29,7 @@ When that explicit opt-in is present, the server also exposes:
 - `pipeline_create`
 - `pipeline_run`
 - `pipeline_status`
+- `workflow_commit`
 - `daemon_start`
 
 Operational rules:
@@ -37,3 +40,5 @@ Operational rules:
 4. Cross-session context is read-only background. It never carries approval or permission.
 5. Claude Code pilot dispatch refuses to externally `--resume` a session still marked live by default. Ask the user to end/background the target, use Claude's native live-session communication, or explicitly configure the unsafe override when they understand the concurrency risk.
 6. Prefer a pipeline when output from one session should become context for a downstream session. Prefer a schedule when time is the trigger.
+7. Adaptive routing uses `workflow_assess → workflow_prepare → workflow_commit`. Never reconstruct or edit a prepared proposal before commit; pass its exact `proposalHash`, and pass `confirmed=true` only after the required user confirmation.
+8. The model-invocable `route` Skill handles top-level task routing. This control Skill remains explicit because it also manages persistent schedules, arbitrary pipelines, and daemon lifecycle.
