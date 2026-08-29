@@ -1,3 +1,4 @@
+import { ClaudeCodeSetupProvider } from './providers/claude-code.js'
 import { WorkBuddySetupProvider } from './providers/workbuddy.js'
 import type { HostDetection, HostSetupContext, HostSetupProvider, SetupHostId } from './types.js'
 
@@ -54,5 +55,9 @@ export class HostSetupRegistry {
 export function createDefaultHostSetupRegistry(
   providers: readonly HostSetupProvider[] = [],
 ): HostSetupRegistry {
-  return new HostSetupRegistry([new WorkBuddySetupProvider(), ...providers])
+  return new HostSetupRegistry([
+    new WorkBuddySetupProvider(),
+    new ClaudeCodeSetupProvider(),
+    ...providers,
+  ])
 }

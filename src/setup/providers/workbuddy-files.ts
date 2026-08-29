@@ -1,7 +1,6 @@
-import { randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, open, readFile, readdir, rename, rm, rmdir, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
 
 export type JsonRecord = Record<string, unknown>
 
@@ -99,8 +98,9 @@ export async function missingBridgeDirectories(root: string): Promise<string[]> 
 export async function removeEmptyParents(start: string, stopAt: string): Promise<void> {
   let current = start
   while (current.startsWith(stopAt) && current !== stopAt) {
+    await pruneEmptyDescendants(current)
     try {
-      await rm(current)
+      await rmdir(current)
     } catch {
       return
     }
@@ -145,6 +145,22 @@ export function digest(value: string): string {
 
 export function isRecord(value: unknown): value is JsonRecord {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+async function pruneEmptyDescendants(directory: string): Promise<void> {
+  let entries
+  try {
+    entries = await readdir(directory, { withFileTypes: true })
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const child = path.join(directory, entry.name)
+    await pruneEmptyDescendants(child)
+    await rmdir(child).catch(() => undefined)
+  }
 }
 
 async function syncDirectory(directory: string): Promise<void> {

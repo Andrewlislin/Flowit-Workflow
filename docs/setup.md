@@ -52,19 +52,10 @@ Every concrete provider must preserve these rules:
 
 ## WorkBuddy provider
 
-WorkBuddy is the first concrete one-click provider:
-
 ```bash
-# Review every planned mutation first.
 flowit-workflow setup workbuddy --dry-run
-
-# Interactive install.
 flowit-workflow setup workbuddy
-
-# Agent/non-interactive install after reviewing the plan.
 flowit-workflow setup workbuddy --yes --json
-
-# Validate or repair later.
 flowit-workflow doctor workbuddy
 flowit-workflow repair workbuddy --dry-run
 ```
@@ -72,37 +63,69 @@ flowit-workflow repair workbuddy --dry-run
 The provider configures four machine-side integration layers:
 
 1. **MCP** — merges `flowit-workflow` into `~/.workbuddy/mcp.json` for user scope or `<project>/.workbuddy/mcp.json` for project scope. Existing unrelated MCP servers are preserved. The Flowit server is configured with `FLOWIT_WORKFLOW_ADAPTER=workbuddy` and mutation tools enabled because applying the setup plan is itself confirmation-gated.
-2. **Bridge Worker Skill** — installs the packaged Skill into `~/.codebuddy/skills/flowit-workflow-bridge-worker/` or the matching project `.codebuddy/skills/` directory. WorkBuddy's Agent execution layer consumes the same user/project Skill locations.
+2. **Bridge Worker Skill** — installs the packaged Skill into `~/.codebuddy/skills/flowit-workflow-bridge-worker/` or the matching project `.codebuddy/skills/` directory.
 3. **Lifecycle Hooks** — merges SessionStart, Stop, and SessionEnd bridge-ingestion commands into `.codebuddy/settings.json` without replacing unrelated settings or Hooks.
 4. **Bridge transport** — creates the durable WorkBuddy inbox/processing/outbox/cancellation/receipt/claim directories under `~/.flowit-workflow/bridges/workbuddy/`.
 
-The provider writes a small ownership manifest so a later upgrade, repair, or uninstall can distinguish installer-owned values from user edits. Existing `flowit-workflow` MCP entries or Skill files that cannot be proven installer-owned block automatic setup instead of being overwritten. Applying a stale plan also fails if the target config changed after planning.
+The provider writes an ownership manifest so a later upgrade, repair, or uninstall can distinguish installer-owned values from user edits. Existing same-name values that conflict with the desired installer configuration block automatic setup instead of being overwritten. Applying a stale plan also fails if the target config changed after planning.
 
 ### Desktop Bridge limitation
 
-Flowit can install every local file needed by the WorkBuddy Desktop Bridge, but WorkBuddy currently exposes no public API for a third-party installer to create or modify a native WorkBuddy Automation. Therefore desktop setup returns an explicit manual step for unattended execution: enable one WorkBuddy Automation that periodically invokes the installed **Flowit Workflow Bridge Worker** Skill. Interactive/manual Skill invocation works without that Automation.
+Flowit can install every local file needed by the WorkBuddy Desktop Bridge, but WorkBuddy currently exposes no public API for a third-party installer to create or modify a native WorkBuddy Automation. Therefore desktop setup returns an explicit manual step for unattended execution: enable one WorkBuddy Automation that periodically invokes the installed **Flowit Workflow Bridge Worker** Skill.
 
 If `FLOWIT_WORKFLOW_WORKBUDDY_DRIVER` is configured, the managed-agent-driver path does not require the desktop polling Automation.
 
-After changing MCP, Skills, or Hooks, restart/reload WorkBuddy so it reloads those files.
+### WorkBuddy uninstall semantics
 
-### Uninstall semantics
+`flowit-workflow uninstall workbuddy` removes only values that still exactly match installer ownership. It preserves unrelated MCP servers/Hooks/settings, user-modified Skills, and all Bridge history/pending transport state.
 
-`flowit-workflow uninstall workbuddy` removes only values that still exactly match installer ownership. It preserves:
+## Claude Code provider
 
-- unrelated MCP servers;
-- unrelated Hooks and settings;
-- a Skill that the user modified after setup;
-- Bridge state/history and pending transport files.
+Claude Code uses its native **skills-directory plugin** mechanism rather than scattering Flowit configuration across user settings:
 
-Bridge state is deliberately retained because deleting it could destroy pending work or audit history. A future explicit purge operation can own that destructive policy separately.
+```bash
+flowit-workflow setup claude-code --dry-run
+flowit-workflow setup claude-code
+flowit-workflow setup claude-code --yes --json
+flowit-workflow doctor claude-code
+flowit-workflow repair claude-code --dry-run
+```
+
+For user scope, Flowit installs one managed plugin root at:
+
+```text
+~/.claude/skills/flowit-workflow/
+  .claude-plugin/plugin.json
+  skills/run-bound/SKILL.md
+  skills/orchestrate/SKILL.md
+  hooks/hooks.json
+  .mcp.json
+```
+
+Claude Code automatically discovers a directory under `~/.claude/skills/` that contains `.claude-plugin/plugin.json` as a personal plugin. This lets one isolated plugin bundle the exact Flowit Skills, lifecycle Hooks, and orchestration MCP server without rewriting unrelated `~/.claude/settings.json` entries.
+
+The generated MCP server enables Flowit mutation tools only as part of the confirmation-gated setup operation and sets `FLOWIT_WORKFLOW_PLUGIN_ROOT` to the installed plugin root so cold dispatch can use the same plugin boundary. The generated Hook commands call the built Flowit CLI directly with `claude-hook`.
+
+For project scope, the same plugin is installed at `<project>/.claude/skills/flowit-workflow/`. Claude Code intentionally keeps its own workspace-trust and project MCP approval gates for project-provided executable components; Flowit reports those as manual steps and does not bypass them.
+
+### Claude ownership and repair
+
+A Flowit ownership manifest records hashes only for files the installer actually owns. If the target `flowit-workflow` plugin directory already exists without that manifest, setup fails closed instead of adopting it. If an installer-owned file is later modified by the user, repair/uninstall preserves that modified file and reports the ownership conflict.
+
+The first install seeds ownership before creating managed plugin files. This makes an interrupted initial install recoverable: a subsequent repair can finish missing files without confusing the partial plugin with a foreign directory.
+
+### Claude uninstall semantics
+
+`flowit-workflow uninstall claude-code` removes only files whose current hash still matches the installer ownership manifest. Empty managed directories are pruned, but non-empty or user-added content is preserved. Durable Claude event/session state under `~/.flowit-workflow/claude/` is retained.
+
+After setup, repair, or uninstall, restart Claude Code or run `/reload-plugins` to reload plugin components.
 
 ## Current rollout state
 
 The known catalog includes:
 
 - WorkBuddy — provider implemented;
-- Claude Code — provider pending;
+- Claude Code — provider implemented;
 - Codex — provider pending;
 - OpenCode — provider pending;
 - DeepSeek Harness — provider pending;
