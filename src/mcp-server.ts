@@ -1,11 +1,16 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { executeControl } from './control.js'
-import type { AutomationTarget, CreatePipelineInput, CreateScheduleInput } from './core/types.js'
 import { createConfiguredRuntime, requireBuiltInAdapterId } from './runtime-factory.js'
-import type { PrepareWorkflowInput, RoutingMode, TaskAssessmentInput } from './routing/types.js'
+import type { AutomationTarget, CreatePipelineInput, CreateScheduleInput } from './core/types.js'
+import {
+  createRoutingAuthorityFromEnvironment,
+  type PrepareWorkflowInput,
+  type TaskAssessmentRequest,
+  type WorkflowTargetBinding,
+} from './routing/index.js'
 
 interface JsonRpcRequest {
   jsonrpc: '2.0'
@@ -21,8 +26,8 @@ const adapterId = requireBuiltInAdapterId(
   process.env.FLOWIT_WORKFLOW_ADAPTER ?? 'claude-code',
   'FLOWIT_WORKFLOW_ADAPTER',
 )
-const defaultRoutingMode = routingModeFromEnvironment(process.env.FLOWIT_WORKFLOW_ROUTING_MODE)
 const core = createConfiguredRuntime({ activeWorkers: false, defaultAdapterId: adapterId })
+const routingAuthority = createRoutingAuthorityFromEnvironment()
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', line => {
   void handle(line).catch(error =>
@@ -61,8 +66,10 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
         capabilities: { tools: {} },
         serverInfo: { name: 'flowit-workflow', version: '0.5.0-beta.1' },
       }
-    case 'ping': return {}
-    case 'tools/list': return { tools: tools() }
+    case 'ping':
+      return {}
+    case 'tools/list':
+      return { tools: tools() }
     case 'tools/call': {
       await core.ready
       const name = String(request.params?.name ?? '')
@@ -71,7 +78,8 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
         content: [{ type: 'text', text: JSON.stringify(await call(name, args), null, 2) }],
       }
     }
-    default: throw new Error(`unsupported MCP method ${request.method}`)
+    default:
+      throw new Error(`unsupported MCP method ${request.method}`)
   }
 }
 
@@ -83,69 +91,133 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
   }
   switch (name) {
     case 'sessions_list': {
-      const selectedAdapterId = optional(args.adapterId)
+      const requestedAdapterId = optional(args.adapterId)
       const query = optional(args.query)
-      return executeControl(core, {
-        op: 'sessions.list',
-        ...(selectedAdapterId ? { adapterId: selectedAdapterId } : {}),
-        ...(query ? { query } : {}),
-      })
+      return executeControl(
+        core,
+        {
+          op: 'sessions.list',
+          ...(requestedAdapterId ? { adapterId: requestedAdapterId } : {}),
+          ...(query ? { query } : {}),
+        },
+        routingAuthority,
+      )
     }
     case 'dispatch':
-      return executeControl(core, {
-        op: 'dispatch',
-        target: object(args.target, 'target') as unknown as AutomationTarget,
-      })
-    case 'schedule_list': return executeControl(core, { op: 'schedule.list' })
+      return executeControl(
+        core,
+        { op: 'dispatch', target: object(args.target, 'target') as unknown as AutomationTarget },
+        routingAuthority,
+      )
+    case 'schedule_list':
+      return executeControl(core, { op: 'schedule.list' }, routingAuthority)
     case 'schedule_create':
-      return executeControl(core, {
-        op: 'schedule.create',
-        input: object(args.input, 'input') as unknown as CreateScheduleInput,
-      })
+      return executeControl(
+        core,
+        {
+          op: 'schedule.create',
+          input: object(args.input, 'input') as unknown as CreateScheduleInput,
+        },
+        routingAuthority,
+      )
     case 'schedule_cancel':
-      return executeControl(core, { op: 'schedule.cancel', id: string(args.id, 'id') })
-    case 'pipeline_list': return executeControl(core, { op: 'pipeline.list' })
+      return executeControl(
+        core,
+        { op: 'schedule.cancel', id: string(args.id, 'id') },
+        routingAuthority,
+      )
+    case 'pipeline_list':
+      return executeControl(core, { op: 'pipeline.list' }, routingAuthority)
     case 'pipeline_create':
-      return executeControl(core, {
-        op: 'pipeline.create',
-        input: object(args.input, 'input') as unknown as CreatePipelineInput,
-      })
+      return executeControl(
+        core,
+        {
+          op: 'pipeline.create',
+          input: object(args.input, 'input') as unknown as CreatePipelineInput,
+        },
+        routingAuthority,
+      )
     case 'pipeline_run':
-      return executeControl(core, { op: 'pipeline.run', id: string(args.id, 'id') })
+      return executeControl(
+        core,
+        { op: 'pipeline.run', id: string(args.id, 'id') },
+        routingAuthority,
+      )
     case 'pipeline_status': {
       const status = string(args.status, 'status')
       if (status !== 'active' && status !== 'paused') {
         throw new Error('status must be active or paused')
       }
-      return executeControl(core, {
-        op: 'pipeline.status',
-        id: string(args.id, 'id'),
-        status,
-      })
+      return executeControl(
+        core,
+        { op: 'pipeline.status', id: string(args.id, 'id'), status },
+        routingAuthority,
+      )
     }
     case 'workflow_assess':
-      return executeControl(core, {
-        op: 'workflow.assess',
-        input: routingInput(args) as unknown as TaskAssessmentInput,
-      })
+      return executeControl(
+        core,
+        { op: 'workflow.assess', input: assessmentInput(args) },
+        routingAuthority,
+      )
     case 'workflow_prepare':
-      return executeControl(core, {
-        op: 'workflow.prepare',
-        input: routingInput(args) as unknown as PrepareWorkflowInput,
-      })
-    case 'workflow_commit': {
-      const confirmed = optionalBoolean(args.confirmed, 'confirmed')
-      const runNow = optionalBoolean(args.runNow, 'runNow')
-      return executeControl(core, {
-        op: 'workflow.commit',
-        proposal: object(args.proposal, 'proposal'),
-        expectedHash: string(args.expectedHash, 'expectedHash'),
-        ...(confirmed !== undefined ? { confirmed } : {}),
-        ...(runNow !== undefined ? { runNow } : {}),
-      })
-    }
-    case 'daemon_start': return startDetachedDaemon()
-    default: throw new Error(`unknown Flowit Workflow MCP tool ${name}`)
+      return executeControl(
+        core,
+        { op: 'workflow.prepare', input: prepareInput(args) },
+        routingAuthority,
+      )
+    case 'workflow_commit':
+      return executeControl(
+        core,
+        {
+          op: 'workflow.commit',
+          proposal: object(args.proposal, 'proposal'),
+          expectedHash: string(args.expectedHash, 'expectedHash'),
+          options: { confirmed: boolean(args.confirmed, 'confirmed') },
+        },
+        routingAuthority,
+      )
+    case 'workflow_run_get':
+      return executeControl(
+        core,
+        { op: 'workflow.run.get', runId: string(args.runId, 'runId') },
+        routingAuthority,
+      )
+    case 'daemon_start':
+      return startDetachedDaemon()
+    default:
+      throw new Error(`unknown Flowit Workflow MCP tool ${name}`)
+  }
+}
+
+function assessmentInput(args: Record<string, unknown>): TaskAssessmentRequest {
+  const signals = args.signals === undefined
+    ? undefined
+    : object(args.signals, 'signals') as TaskAssessmentRequest['signals']
+  const authorityToken = optional(args.authorityToken)
+  return {
+    task: string(args.task, 'task'),
+    ...(signals ? { signals } : {}),
+    ...(authorityToken ? { authorityToken } : {}),
+  }
+}
+
+function prepareInput(args: Record<string, unknown>): PrepareWorkflowInput {
+  const rawTarget = object(args.target, 'target')
+  const target: WorkflowTargetBinding = {
+    adapterId: string(rawTarget.adapterId, 'target.adapterId'),
+    sessionId: string(rawTarget.sessionId, 'target.sessionId'),
+    ...(rawTarget.skills === undefined
+      ? {}
+      : { skills: stringArray(rawTarget.skills, 'target.skills') }),
+  }
+  const maxNodes = optionalInteger(args.maxNodes, 'maxNodes')
+  const pipelineName = optional(args.pipelineName)
+  return {
+    assessmentToken: string(args.assessmentToken, 'assessmentToken'),
+    target,
+    ...(maxNodes === undefined ? {} : { maxNodes }),
+    ...(pipelineName ? { pipelineName } : {}),
   }
 }
 
@@ -175,8 +247,7 @@ async function startDetachedDaemon(): Promise<unknown> {
       }
       try {
         const lines = stdout.trim().split('\n').filter(Boolean)
-        const result = JSON.parse(lines.at(-1) ?? '') as unknown
-        resolve(result)
+        resolve(JSON.parse(lines.at(-1) ?? '') as unknown)
       } catch (error: unknown) {
         reject(
           new Error(
@@ -189,23 +260,16 @@ async function startDetachedDaemon(): Promise<unknown> {
 }
 
 function tools(): unknown[] {
-  const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
+  const obj = (
+    properties: Record<string, unknown>,
+    required: string[] = [],
+  ) => ({ type: 'object', additionalProperties: false, properties, required })
+  const signals = {
     type: 'object',
     additionalProperties: false,
-    properties,
-    required,
-  })
-  const assessmentProperties = {
-    task: { type: 'string', minLength: 1 },
-    mode: { type: 'string', enum: ['manual', 'suggest', 'auto-safe'] },
-    explicitIntent: {
-      type: 'string',
-      enum: ['unspecified', 'force-flowit', 'force-direct', 'preview'],
-    },
-    confidence: { type: 'number', minimum: 0, maximum: 1 },
-    signals: obj({
+    properties: {
       taskKind: { type: 'string', enum: ['general', 'research', 'coding', 'content'] },
-      distinctStages: { type: 'integer', minimum: 1 },
+      distinctStages: { type: 'integer', minimum: 1, maximum: 12 },
       decomposability: { type: 'integer', minimum: 0, maximum: 3 },
       coupling: { type: 'integer', minimum: 0, maximum: 3 },
       durabilityNeed: { type: 'integer', minimum: 0, maximum: 3 },
@@ -216,40 +280,23 @@ function tools(): unknown[] {
       crossAdapterNeed: { type: 'boolean' },
       sideEffectRisk: { type: 'string', enum: ['none', 'reversible', 'irreversible'] },
       ambiguity: { type: 'integer', minimum: 0, maximum: 3 },
-    }),
+    },
+  }
+  const target = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['adapterId', 'sessionId'],
+    properties: {
+      adapterId: { type: 'string' },
+      sessionId: { type: 'string' },
+      skills: { type: 'array', items: { type: 'string' } },
+    },
   }
   return [
     {
       name: 'sessions_list',
       description: 'List sessions visible through Flowit Workflow Agent adapters.',
       inputSchema: obj({ adapterId: { type: 'string' }, query: { type: 'string' } }),
-    },
-    {
-      name: 'workflow_assess',
-      description:
-        'Read-only adaptive routing assessment. Convert the current top-level user task into calibrated structural signals and receive direct, ask, or pipeline guidance. This tool never creates Workflow state.',
-      inputSchema: obj(assessmentProperties, ['task']),
-    },
-    {
-      name: 'workflow_prepare',
-      description:
-        'Read-only preparation of a bounded 2-6 node, single-Session, linear, manual Flowit Pipeline. Returns the complete proposal and a SHA-256 proposalHash; it does not create or run anything.',
-      inputSchema: obj(
-        {
-          ...assessmentProperties,
-          target: obj(
-            {
-              adapterId: { type: 'string', minLength: 1 },
-              sessionId: { type: 'string', minLength: 1 },
-              skills: { type: 'array', items: { type: 'string' } },
-            },
-            ['adapterId', 'sessionId'],
-          ),
-          maxNodes: { type: 'integer', minimum: 2, maximum: 6 },
-          pipelineName: { type: 'string' },
-        },
-        ['task', 'target'],
-      ),
     },
     {
       name: 'dispatch',
@@ -273,40 +320,71 @@ function tools(): unknown[] {
     },
     {
       name: 'pipeline_list',
-      description: 'List pipelines.',
+      description: 'List persistent pipelines.',
       inputSchema: obj({}),
     },
     {
       name: 'pipeline_create',
-      description: 'Create a cross-session/cross-adapter pipeline.',
+      description: 'Create a persistent cross-session/cross-adapter pipeline.',
       inputSchema: obj({ input: { type: 'object' } }, ['input']),
     },
     {
       name: 'pipeline_run',
-      description: 'Run a pipeline now.',
+      description: 'Run a persistent pipeline now and wait for completion.',
       inputSchema: obj({ id: { type: 'string' } }, ['id']),
     },
     {
       name: 'pipeline_status',
-      description: 'Pause or activate a pipeline.',
+      description: 'Pause or activate a persistent pipeline.',
       inputSchema: obj(
         { id: { type: 'string' }, status: { type: 'string', enum: ['active', 'paused'] } },
         ['id', 'status'],
       ),
     },
     {
+      name: 'workflow_assess',
+      description:
+        'Read-only adaptive routing assessment. Routing mode comes only from trusted process configuration. Caller signals can increase but never lower inferred safety risk. A host-issued authority token may attest the exact top-level task.',
+      inputSchema: obj(
+        {
+          task: { type: 'string' },
+          signals,
+          authorityToken: { type: 'string' },
+        },
+        ['task'],
+      ),
+    },
+    {
+      name: 'workflow_prepare',
+      description:
+        'Read-only preparation of an expiring 2-6 node, single-Session run-once proposal from a signed assessment token. Resolves and fingerprints the exact Adapter and Session before returning.',
+      inputSchema: obj(
+        {
+          assessmentToken: { type: 'string' },
+          target,
+          maxNodes: { type: 'integer', minimum: 2, maximum: 6 },
+          pipelineName: { type: 'string' },
+        },
+        ['assessmentToken', 'target'],
+      ),
+    },
+    {
       name: 'workflow_commit',
       description:
-        'Verify and commit the exact workflow_prepare proposal. A proposal that requires confirmation is rejected unless confirmed=true. runNow=true uses a stable trigger identity and auto-pauses the Pipeline after a terminal result.',
+        'Revalidate an expiring signed proposal and exact binding, atomically persist a durable run-once snapshot, and return immediately with a run id. Does not create a permanent PipelineDefinition.',
       inputSchema: obj(
         {
           proposal: { type: 'object' },
-          expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+          expectedHash: { type: 'string' },
           confirmed: { type: 'boolean' },
-          runNow: { type: 'boolean' },
         },
-        ['proposal', 'expectedHash'],
+        ['proposal', 'expectedHash', 'confirmed'],
       ),
+    },
+    {
+      name: 'workflow_run_get',
+      description: 'Read the current status and node checkpoints of an adaptive run-once Pipeline.',
+      inputSchema: obj({ runId: { type: 'string' } }, ['runId']),
     },
     {
       name: 'daemon_start',
@@ -314,10 +392,6 @@ function tools(): unknown[] {
       inputSchema: obj({}),
     },
   ].filter((tool: any) => mutationsEnabled || !isMutation(tool.name))
-}
-
-function routingInput(args: Record<string, unknown>): Record<string, unknown> {
-  return args.mode === undefined ? { ...args, mode: defaultRoutingMode } : args
 }
 
 function isMutation(name: string): boolean {
@@ -333,27 +407,31 @@ function isMutation(name: string): boolean {
   ]).has(name)
 }
 
-function routingModeFromEnvironment(value: string | undefined): RoutingMode {
-  const normalized = value?.trim() || 'suggest'
-  if (normalized !== 'manual' && normalized !== 'suggest' && normalized !== 'auto-safe') {
-    throw new Error('FLOWIT_WORKFLOW_ROUTING_MODE must be manual, suggest, or auto-safe')
-  }
-  return normalized
-}
-
 function string(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} must be a non-empty string`)
-  return value
+  return value.trim()
 }
 
 function optional(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value : undefined
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-function optionalBoolean(value: unknown, name: string): boolean | undefined {
+function optionalInteger(value: unknown, name: string): number | undefined {
   if (value === undefined) return undefined
+  if (!Number.isSafeInteger(value)) throw new Error(`${name} must be an integer`)
+  return Number(value)
+}
+
+function boolean(value: unknown, name: string): boolean {
   if (typeof value !== 'boolean') throw new Error(`${name} must be a boolean`)
   return value
+}
+
+function stringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+    throw new Error(`${name} must be an array of strings`)
+  }
+  return value.map(item => item.trim()).filter(Boolean)
 }
 
 function object(value: unknown, name: string): Record<string, unknown> {
