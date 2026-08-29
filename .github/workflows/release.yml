@@ -76,6 +76,7 @@ jobs:
             .tmp-packs/*.tgz
             .tmp-packs/SHA256SUMS
           if-no-files-found: error
+          include-hidden-files: true
 
       - name: Create GitHub prerelease
         env:
