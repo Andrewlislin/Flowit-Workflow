@@ -1,3 +1,4 @@
+import { knownSetupHost, runtimeAdapterIdForSetupHost } from '../setup/catalog.js'
 import { BUILT_IN_PRESETS } from './builtins.js'
 import type { PresetDefinition } from './types.js'
 
@@ -28,7 +29,32 @@ export class PresetRegistry {
   require(id: string): PresetDefinition {
     const preset = this.get(id)
     if (!preset) throw new Error(`unknown preset ${id}`)
-    return preset
+    return {
+      version: preset.version,
+      id: preset.id,
+      displayName: preset.displayName,
+      description: preset.description,
+      roles: preset.roles,
+      inputRequired: preset.inputRequired,
+      inputLabel: preset.inputLabel,
+      render(request) {
+        const pipeline = preset.render(request)
+        return {
+          ...pipeline,
+          nodes: pipeline.nodes.map(node => {
+            const adapterId = node.target.adapterId?.trim()
+            if (!adapterId || !knownSetupHost(adapterId)) return node
+            return {
+              ...node,
+              target: {
+                ...node.target,
+                adapterId: runtimeAdapterIdForSetupHost(adapterId),
+              },
+            }
+          }),
+        }
+      },
+    }
   }
 
   list(): PresetDefinition[] {
