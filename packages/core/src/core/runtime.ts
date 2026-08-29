@@ -7,6 +7,7 @@ import { JsonWorkflowStore } from './store.js'
 import { OrchestrationDispatcher } from './dispatcher.js'
 import { DurableScheduler } from './scheduler.js'
 import { PipelineRuntime } from './pipeline.js'
+import { RunOncePipelineRuntime } from './run-once.js'
 import type { AgentAdapter, FlowitCoreConfig } from './types.js'
 
 const DISPOSE_READY_GRACE_MS = 5_000
@@ -19,6 +20,7 @@ export class FlowitOrchestrationCore {
   readonly dispatcher: OrchestrationDispatcher
   readonly scheduler: DurableScheduler
   readonly pipelines: PipelineRuntime
+  readonly runOncePipelines: RunOncePipelineRuntime
   readonly ready: Promise<void>
   readonly workerId: string
   private readonly startupController = new AbortController()
@@ -81,6 +83,13 @@ export class FlowitOrchestrationCore {
       config.defaultAdapterId,
       { workerId: this.workerId, leaseDurationMs, retryDelayMs, maxAttempts: maxPipelineAttempts },
     )
+    this.runOncePipelines = new RunOncePipelineRuntime(
+      this.adapters,
+      this.store,
+      this.dispatcher,
+      this.contextGraph,
+      { workerId: this.workerId, leaseDurationMs, retryDelayMs, maxAttempts: maxPipelineAttempts },
+    )
     this.scheduler = new DurableScheduler(
       this.store,
       this.dispatcher,
@@ -103,9 +112,10 @@ export class FlowitOrchestrationCore {
     this.disposed = true
     this.startupController.abort(new Error('Flowit Orchestration Core disposed during startup'))
     this.scheduler.dispose()
+    const runOnceStop = this.runOncePipelines.dispose()
     const pipelineStop = this.pipelines.dispose()
     await this.adapters.dispose()
-    await pipelineStop
+    await Promise.all([runOnceStop, pipelineStop])
     await settleWithin(this.ready, DISPOSE_READY_GRACE_MS)
   }
 
@@ -117,6 +127,8 @@ export class FlowitOrchestrationCore {
       await this.adapters.startAll(signal)
       signal.throwIfAborted()
       await this.pipelines.start(signal)
+      signal.throwIfAborted()
+      await this.runOncePipelines.start(signal)
       signal.throwIfAborted()
       await this.scheduler.start()
     } catch (error: unknown) {
