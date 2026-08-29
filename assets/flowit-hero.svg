@@ -1,61 +1,116 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="420" viewBox="0 0 1280 420" role="img" aria-labelledby="title desc">
-  <title id="title">Flowit Workflow</title>
-  <desc id="desc">Agent-agnostic durable orchestration for long-lived AI sessions.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">浮域 Flowit Workflow</title>
+  <desc id="desc">CoaseEdge 出品的多 Agent 持久工作流编排平台：自然语言安装、多 Agent 协同、可恢复执行与定时自动运行。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#07111f"/>
-      <stop offset="0.55" stop-color="#101c35"/>
-      <stop offset="1" stop-color="#1a1240"/>
+      <stop offset="0" stop-color="#06101a"/>
+      <stop offset="0.52" stop-color="#0a1424"/>
+      <stop offset="1" stop-color="#11142f"/>
     </linearGradient>
     <linearGradient id="flow" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#38bdf8"/>
-      <stop offset="0.5" stop-color="#818cf8"/>
-      <stop offset="1" stop-color="#c084fc"/>
+      <stop offset="0" stop-color="#18d7ee"/>
+      <stop offset="0.48" stop-color="#4aa5ff"/>
+      <stop offset="1" stop-color="#b14cff"/>
     </linearGradient>
-    <radialGradient id="glow">
-      <stop offset="0" stop-color="#818cf8" stop-opacity=".36"/>
-      <stop offset="1" stop-color="#818cf8" stop-opacity="0"/>
+    <radialGradient id="glowA">
+      <stop offset="0" stop-color="#17d8ee" stop-opacity="0.19"/>
+      <stop offset="1" stop-color="#17d8ee" stop-opacity="0"/>
     </radialGradient>
-    <filter id="soft"><feGaussianBlur stdDeviation="18"/></filter>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#020617" flood-opacity=".55"/>
+    <radialGradient id="glowB">
+      <stop offset="0" stop-color="#8657ff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#8657ff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000000" flood-opacity="0.42"/>
     </filter>
+    <style>
+      .sans{font-family:Inter,Arial,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif}
+      .serif{font-family:Georgia,"Times New Roman","Noto Serif CJK SC","Songti SC",serif}
+      .muted{fill:#b8cbdd}
+    </style>
   </defs>
 
-  <rect width="1280" height="420" rx="28" fill="url(#bg)"/>
-  <circle cx="1020" cy="90" r="190" fill="url(#glow)" filter="url(#soft)"/>
-  <circle cx="180" cy="380" r="160" fill="#0ea5e9" opacity=".08" filter="url(#soft)"/>
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <circle cx="300" cy="150" r="310" fill="url(#glowA)"/>
+  <circle cx="1110" cy="180" r="330" fill="url(#glowB)"/>
 
-  <g opacity=".16" stroke="#94a3b8">
-    <path d="M0 70H1280M0 140H1280M0 210H1280M0 280H1280M0 350H1280"/>
-    <path d="M80 0V420M160 0V420M240 0V420M320 0V420M400 0V420M480 0V420M560 0V420M640 0V420M720 0V420M800 0V420M880 0V420M960 0V420M1040 0V420M1120 0V420M1200 0V420"/>
+  <g opacity="0.11" stroke="#b7d6eb" stroke-width="1">
+    <path d="M0 40H1600M0 80H1600M0 120H1600M0 160H1600M0 200H1600M0 240H1600M0 280H1600M0 320H1600M0 360H1600M0 400H1600M0 440H1600M0 480H1600M0 520H1600M0 560H1600M0 600H1600M0 640H1600M0 680H1600M0 720H1600M0 760H1600M0 800H1600M0 840H1600"/>
+    <path d="M40 0V900M80 0V900M120 0V900M160 0V900M200 0V900M240 0V900M280 0V900M320 0V900M360 0V900M400 0V900M440 0V900M480 0V900M520 0V900M560 0V900M600 0V900M640 0V900M680 0V900M720 0V900M760 0V900M800 0V900M840 0V900M880 0V900M920 0V900M960 0V900M1000 0V900M1040 0V900M1080 0V900M1120 0V900M1160 0V900M1200 0V900M1240 0V900M1280 0V900M1320 0V900M1360 0V900M1400 0V900M1440 0V900M1480 0V900M1520 0V900M1560 0V900"/>
   </g>
 
-  <g transform="translate(90 95)" filter="url(#shadow)">
-    <rect width="230" height="230" rx="54" fill="#0b1224" stroke="#334155" stroke-width="2"/>
-    <path d="M52 62H122C145 62 164 81 164 104V114" fill="none" stroke="url(#flow)" stroke-width="14" stroke-linecap="round"/>
-    <path d="M178 168H108C85 168 66 149 66 126V116" fill="none" stroke="url(#flow)" stroke-width="14" stroke-linecap="round"/>
-    <path d="M148 98L164 114L180 98M82 132L66 116L50 132" fill="none" stroke="#e0e7ff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="52" cy="62" r="15" fill="#38bdf8"/>
-    <circle cx="178" cy="168" r="15" fill="#c084fc"/>
-    <circle cx="164" cy="114" r="10" fill="#818cf8"/>
-    <circle cx="66" cy="116" r="10" fill="#818cf8"/>
+  <g filter="url(#shadow)">
+    <rect x="58" y="44" width="305" height="104" rx="24" fill="#f8fbfd" stroke="#28d5e8" stroke-width="2"/>
+  </g>
+  <text class="sans" x="80" y="94" fill="#07131d" font-size="35" font-weight="800" letter-spacing="2">高斯边界</text>
+  <path d="M80 106H322" stroke="#19cfe5" stroke-width="3"/>
+  <circle cx="260" cy="106" r="5" fill="#f8fbfd" stroke="#19cfe5" stroke-width="3"/>
+  <text class="sans" x="80" y="134" fill="#1e3545" font-size="17" letter-spacing="7">CoaseEdge</text>
+
+  <g transform="translate(78 150)">
+    <text class="serif" x="0" y="210" fill="#f8fafc" font-size="210" font-weight="600">Flo</text>
+    <text class="serif" x="316" y="210" fill="url(#flow)" font-size="210" font-weight="600">w</text>
+    <text class="serif" x="492" y="210" fill="#f8fafc" font-size="210" font-weight="600">it</text>
+    <text class="serif" x="465" y="327" fill="#f8fafc" font-size="92" font-weight="700" letter-spacing="14">浮域</text>
+
+    <text class="sans" x="8" y="420" fill="#ffffff" font-size="35" font-weight="800">让 AI Agent 从一次性助手，升级为可持续工作流</text>
+    <text class="sans" x="10" y="458" fill="#99e5f8" font-size="22">可长期运行 · 可分工 · 可恢复 · 可定时</text>
+    <text class="sans" x="10" y="492" fill="#a8bed2" font-size="18">WorkBuddy · Claude Code · Codex · OpenCode · DeepSeek Harness · 豆包办公</text>
+    <rect x="8" y="516" width="244" height="40" rx="20" fill="#081623" stroke="#2bdcf1" stroke-width="2"/>
+    <text class="sans" x="130" y="542" text-anchor="middle" fill="#99eafa" font-size="19">办公与编程场景通用</text>
   </g>
 
-  <g transform="translate(375 105)">
-    <text x="0" y="72" fill="#f8fafc" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="72" font-weight="700" letter-spacing="-2">Flowit Workflow</text>
-    <text x="2" y="124" fill="#cbd5e1" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="25" font-weight="500">Durable orchestration for long-lived AI agent sessions</text>
-    <g transform="translate(2 164)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="650">
-      <rect width="172" height="42" rx="21" fill="#082f49" stroke="#0ea5e9"/>
-      <text x="86" y="27" text-anchor="middle" fill="#bae6fd">Schedule Engine</text>
-      <rect x="186" width="156" height="42" rx="21" fill="#1e1b4b" stroke="#6366f1"/>
-      <text x="264" y="27" text-anchor="middle" fill="#c7d2fe">Work Graphs</text>
-      <rect x="356" width="138" height="42" rx="21" fill="#3b0764" stroke="#a855f7"/>
-      <text x="425" y="27" text-anchor="middle" fill="#e9d5ff">Skill Binding</text>
-      <rect x="508" width="152" height="42" rx="21" fill="#172554" stroke="#3b82f6"/>
-      <text x="584" y="27" text-anchor="middle" fill="#bfdbfe">Context Graph</text>
+  <path d="M900 105H1065" stroke="url(#flow)" stroke-width="4"/>
+  <text class="sans" x="900" y="174" fill="#ffffff" font-size="42" font-weight="800">核心优势</text>
+  <text class="sans muted" x="902" y="208" font-size="22">让流程可管理，让执行可持续</text>
+
+  <g class="sans" filter="url(#shadow)">
+    <g transform="translate(900 238)">
+      <rect width="592" height="110" rx="24" fill="#09121f" stroke="#35dcf5" stroke-width="2"/>
+      <circle cx="38" cy="38" r="16" fill="none" stroke="#35dcf5" stroke-width="3"/>
+      <rect x="28" y="30" width="20" height="14" rx="3" fill="none" stroke="#ffffff" stroke-width="2"/>
+      <path d="M36 44L38 49L40 44" fill="#ffffff"/>
+      <text x="73" y="50" fill="#ffffff" font-size="28" font-weight="800">自然语言安装</text>
+      <text x="73" y="82" fill="#c7d7e5" font-size="18">让 Agent 帮你完成安装、配置检查与健康诊断</text>
+    </g>
+
+    <g transform="translate(900 368)">
+      <rect width="592" height="110" rx="24" fill="#09121f" stroke="#658bff" stroke-width="2"/>
+      <circle cx="38" cy="38" r="16" fill="none" stroke="#658bff" stroke-width="3"/>
+      <circle cx="38" cy="31" r="3" fill="#ffffff"/><circle cx="31" cy="43" r="3" fill="#ffffff"/><circle cx="45" cy="43" r="3" fill="#ffffff"/>
+      <path d="M38 34L33 41M38 34L43 41M34 43H42" stroke="#ffffff" stroke-width="2"/>
+      <text x="73" y="50" fill="#ffffff" font-size="28" font-weight="800">多 Agent 协同</text>
+      <text x="73" y="82" fill="#c7d7e5" font-size="18">研究、写作、实现、测试、Review 可拆分成不同角色</text>
+    </g>
+
+    <g transform="translate(900 498)">
+      <rect width="592" height="110" rx="24" fill="#09121f" stroke="#b44aff" stroke-width="2"/>
+      <circle cx="38" cy="38" r="16" fill="none" stroke="#b44aff" stroke-width="3"/>
+      <path d="M47 36A10 10 0 1 0 46 45" fill="none" stroke="#ffffff" stroke-width="2.5"/>
+      <path d="M45 30L51 35L44 38" fill="none" stroke="#ffffff" stroke-width="2.5"/>
+      <text x="73" y="50" fill="#ffffff" font-size="28" font-weight="800">可恢复执行</text>
+      <text x="73" y="82" fill="#c7d7e5" font-size="18">中断后从已完成步骤继续，不必重新交代全部上下文</text>
+    </g>
+
+    <g transform="translate(900 628)">
+      <rect width="592" height="110" rx="24" fill="#09121f" stroke="#23d6b8" stroke-width="2"/>
+      <circle cx="38" cy="38" r="16" fill="none" stroke="#23d6b8" stroke-width="3"/>
+      <path d="M38 29V38L45 42" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round"/>
+      <text x="73" y="50" fill="#ffffff" font-size="28" font-weight="800">定时自动运行</text>
+      <text x="73" y="82" fill="#c7d7e5" font-size="18">支持手动、每天、工作日与固定间隔等持久调度</text>
     </g>
   </g>
 
-  <text x="1190" y="390" text-anchor="end" fill="#64748b" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">Apache-2.0 · TypeScript · Node.js</text>
+  <g filter="url(#shadow)">
+    <rect x="60" y="775" width="1480" height="86" rx="28" fill="#08131f" stroke="#30d8ef" stroke-width="2"/>
+  </g>
+  <text class="sans" x="90" y="809" fill="#ffffff" font-size="22" font-weight="800">典型办公场景</text>
+  <text class="sans" x="90" y="841" fill="#b7cad9" font-size="20">发现热点 → 深度研究 → 写作审校 → 最终成稿</text>
+  <path d="M520 811H1080" stroke="url(#flow)" stroke-width="3" stroke-dasharray="5 6"/>
+  <circle cx="805" cy="811" r="15" fill="#08131f" stroke="#39dcef" stroke-width="3"/>
+  <circle cx="805" cy="811" r="6" fill="#39dcef"/>
+  <text class="sans" x="880" y="809" fill="#ffffff" font-size="22" font-weight="800">典型编程场景</text>
+  <text class="sans" x="880" y="841" fill="#b7cad9" font-size="20">规划任务 → 编码实现 → 运行测试 → 独立 Review</text>
+
+  <text class="sans" x="800" y="892" text-anchor="middle" fill="#7f97aa" font-size="15">浮域（Flowit Workflow） · CoaseEdge 出品</text>
 </svg>
