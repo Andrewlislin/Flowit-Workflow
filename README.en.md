@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/flowit-hero.jpg" alt="Flowit Workflow — CoaseEdge multi-agent durable workflow orchestration" width="100%" />
+<img src="assets/flowit-hero.svg" alt="Flowit Workflow — CoaseEdge multi-agent durable workflow orchestration" width="100%" />
 
 <br />
 
