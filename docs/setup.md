@@ -223,6 +223,39 @@ The same overlay can be supplied to a headless profile. User scope does not requ
 
 `flowit-workflow uninstall dsh` removes only the marker-bounded native plugin block when its hash still matches the ownership manifest. Other Harness patch entries and the patch file itself are retained. Flowit workflow state is deliberately retained to avoid deleting durable orchestration history.
 
+## 豆包办公 provider
+
+豆包办公 uses Flowit's Bridge v2 integration because Flowit does not claim a public stable Session Resume, Skill-installation, or Automation-management API for this host:
+
+```bash
+flowit-workflow setup doubao-office --dry-run
+flowit-workflow setup doubao-office
+flowit-workflow setup doubao-office --yes --json
+flowit-workflow doctor doubao-office
+flowit-workflow repair doubao-office --dry-run
+```
+
+User scope stages the packaged **Flowit Workflow Bridge Worker** Skill at `~/.flowit-workflow/integrations/doubao-office/flowit-workflow-bridge-worker/`. Project scope stages the same Skill under `<project>/.flowit-workflow/doubao-office/flowit-workflow-bridge-worker/`. Both scopes create/use the shared durable Bridge transport root at `~/.flowit-workflow/bridges/doubao-office/`.
+
+For managed enterprise deployments, `FLOWIT_WORKFLOW_DOUBAO_SKILL_DIR` may point to an explicitly deployment-owned Skill directory. Flowit will deploy `SKILL.md` there after confirmation, but it never guesses private 豆包办公 application directories.
+
+### 豆包办公 host boundary
+
+Setup remains `manual-action-required` because the host-side controls are intentionally outside Flowit's claimed API surface. The user/deployment must:
+
+1. import/enable the staged Worker Skill in 豆包办公 unless an explicit managed Skill directory is already authoritative;
+2. authorize that Skill only for the Flowit Bridge root;
+3. create a 豆包办公 native scheduled task that periodically invokes the Worker;
+4. run/restart the Flowit daemon with adapter `doubao-office`.
+
+This keeps the product experience guided without pretending an undocumented host mutation succeeded.
+
+### 豆包办公 ownership and uninstall
+
+The provider records ownership only for Skill files that Flowit actually created or updated. A pre-existing identical Skill is accepted but remains unowned; a conflicting unowned Skill fails closed. Repair restores missing installer-owned Skills and Bridge transport directories. User-modified Skills are preserved.
+
+`flowit-workflow uninstall doubao-office` removes only Skill files whose hashes still prove installer ownership. Bridge history, pending inbox work, receipts, claims, cancellations, and other durable transport state are always retained. Host-imported Skills and native scheduled tasks must be disabled manually because Flowit has no documented API to mutate those host controls.
+
 ## Current rollout state
 
 The known catalog includes:
@@ -232,6 +265,6 @@ The known catalog includes:
 - Codex — provider implemented;
 - OpenCode — provider implemented;
 - DeepSeek Harness — provider implemented;
-- 豆包办公 — provider pending.
+- 豆包办公 — guided Bridge provider implemented.
 
-The remaining provider can land independently on the same framework without changing the CLI contract.
+The initial multi-host setup-provider rollout is complete. The next productization phase is preset/template UX, release packaging, and `v0.5.0-beta.1` validation rather than adding another built-in setup mechanism.
