@@ -165,6 +165,32 @@ If the managed block disappears but ownership remains, `repair` restores it. If 
 
 Restart Codex or start a new thread after setup/repair/uninstall so MCP configuration is reloaded.
 
+## OpenCode V2 provider
+
+OpenCode is configured through its V2 `mcp.servers` JSON/JSONC surface:
+
+```bash
+flowit-workflow setup opencode --dry-run
+flowit-workflow setup opencode
+flowit-workflow setup opencode --yes --json
+flowit-workflow doctor opencode
+flowit-workflow repair opencode --dry-run
+```
+
+User scope targets `OPENCODE_CONFIG` when explicitly set, otherwise `${XDG_CONFIG_HOME:-~/.config}/opencode/opencode.jsonc|json`. Project scope discovers root `opencode.jsonc|json` and `.opencode/opencode.jsonc|json`; multiple existing candidates fail closed rather than guessing which config layer Flowit owns.
+
+The provider uses a dependency-free, comment/trailing-comma aware JSONC parser/editor and changes only `mcp.servers.flowit-workflow`. Unrelated comments, formatting, models, agents, permissions, and other MCP servers remain outside Flowit's ownership boundary. Legacy direct `mcp.flowit-workflow`, duplicate target-path keys, malformed JSONC, and unmanaged same-name V2 entries all block automatic setup.
+
+The generated local MCP entry launches the built Flowit server with `FLOWIT_WORKFLOW_ADAPTER=opencode`, confirmation-gated `FLOWIT_WORKFLOW_MUTATIONS=1`, and `FLOWIT_WORKFLOW_OPENCODE_URL` (default `http://127.0.0.1:4096`).
+
+### OpenCode host service boundary
+
+Flowit does not silently start an unmanaged OpenCode process. `doctor opencode` probes the configured V2 HTTP endpoint; an unreachable service returns `manual-action-required` with explicit `serve`/endpoint instructions. When the server is reachable and the user-scope config is healthy, setup can complete without a manual host step.
+
+### OpenCode uninstall semantics
+
+`flowit-workflow uninstall opencode` removes only the installer-owned `mcp.servers.flowit-workflow` entry. The config file itself is always retained, including when Flowit created it originally, so any bytes/comments added after setup can never be lost by uninstall. The separate ownership manifest is removed after safe cleanup.
+
 ## Current rollout state
 
 The known catalog includes:
@@ -172,7 +198,7 @@ The known catalog includes:
 - WorkBuddy — provider implemented;
 - Claude Code — provider implemented;
 - Codex — provider implemented;
-- OpenCode — provider pending;
+- OpenCode — provider implemented;
 - DeepSeek Harness — provider pending;
 - 豆包办公 — provider pending.
 
