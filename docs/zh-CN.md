@@ -2,6 +2,8 @@
 
 **浮域** 是 Flowit Workflow 的中文产品名。
 
+仓库默认首页 [`README.md`](../README.md) 使用中文，并面向普通用户解释浮域是什么、与单独 Agent 的区别、各 Host 的安装/使用方式、现成工作模式和典型场景。英文版见 [`README.en.md`](../README.en.md)。
+
 为保持兼容性，技术标识继续使用英文：
 
 - npm 包：`@coaseedge/flowit-workflow`
