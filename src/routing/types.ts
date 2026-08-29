@@ -1,4 +1,8 @@
-import type { CreatePipelineInput } from '../core/types.js'
+import type {
+  AgentAdapterCapabilities,
+  AgentSessionDescriptor,
+  CreatePipelineInput,
+} from '../core/types.js'
 
 export type RoutingMode = 'manual' | 'suggest' | 'auto-safe'
 export type RoutingExplicitIntent =
@@ -41,11 +45,17 @@ export interface ResolvedTaskAssessmentSignals {
   readonly ambiguity: SignalLevel
 }
 
-export interface TaskAssessmentInput {
+export interface TaskAssessmentRequest {
   readonly task: string
-  readonly mode?: RoutingMode
-  readonly explicitIntent?: RoutingExplicitIntent
-  readonly confidence?: number
+  readonly signals?: TaskAssessmentSignals
+  readonly authorityToken?: string
+}
+
+export interface TrustedTaskAssessmentInput {
+  readonly task: string
+  readonly mode: RoutingMode
+  readonly explicitIntent: RoutingExplicitIntent
+  readonly trustedAuthority: boolean
   readonly signals?: TaskAssessmentSignals
 }
 
@@ -63,10 +73,11 @@ export interface RoutingQuestion {
 export interface TaskAssessmentResult {
   readonly kind: 'task-assessment'
   readonly version: 1
-  readonly policyVersion: 'adaptive-routing-mvp-v1'
+  readonly policyVersion: 'adaptive-routing-mvp-v2'
   readonly task: string
   readonly mode: RoutingMode
   readonly explicitIntent: RoutingExplicitIntent
+  readonly authorityTrusted: boolean
   readonly decision: RoutingDecisionKind
   readonly score: number
   readonly confidence: number
@@ -76,25 +87,43 @@ export interface TaskAssessmentResult {
   readonly question?: RoutingQuestion
 }
 
+export interface SignedTaskAssessment extends TaskAssessmentResult {
+  readonly expiresAt: string
+  readonly assessmentToken: string
+}
+
 export interface WorkflowTargetBinding {
   readonly adapterId: string
   readonly sessionId: string
   readonly skills?: readonly string[]
 }
 
-export interface PrepareWorkflowInput extends TaskAssessmentInput {
+export interface PrepareWorkflowInput {
+  readonly assessmentToken: string
   readonly target: WorkflowTargetBinding
   readonly maxNodes?: number
   readonly pipelineName?: string
 }
 
+export interface ResolvedWorkflowBinding {
+  readonly adapterId: string
+  readonly sessionId: string
+  readonly session: AgentSessionDescriptor
+  readonly capabilities: AgentAdapterCapabilities
+  readonly skills: readonly string[]
+  readonly fingerprint: string
+}
+
 export interface PreparedWorkflowProposal {
   readonly kind: 'adaptive-workflow-proposal'
-  readonly version: 1
-  readonly policyVersion: 'adaptive-routing-mvp-v1'
+  readonly version: 2
+  readonly policyVersion: 'adaptive-routing-mvp-v2'
   readonly createdAt: string
+  readonly expiresAt: string
   readonly task: string
   readonly assessment: TaskAssessmentResult
+  readonly assessmentToken: string
+  readonly binding: ResolvedWorkflowBinding
   readonly pipeline: CreatePipelineInput
   readonly proposalHash: string
   readonly confirmationRequired: boolean
@@ -103,18 +132,16 @@ export interface PreparedWorkflowProposal {
 
 export interface CommitPreparedWorkflowOptions {
   readonly confirmed?: boolean
-  readonly runNow?: boolean
 }
 
 export interface CommitPreparedWorkflowResult {
   readonly kind: 'adaptive-workflow-commit-result'
-  readonly version: 1
+  readonly version: 2
   readonly proposalHash: string
-  readonly action: 'created' | 'reused'
-  readonly pipelineId: string
+  readonly action: 'accepted' | 'reused'
+  readonly definitionId: string
   readonly pipelineName: string
-  readonly pipelineStatus: 'active' | 'paused'
-  readonly runStatus: 'not-started' | 'completed' | 'dead-letter'
-  readonly ran: boolean
+  readonly runId?: string
+  readonly runStatus: 'running' | 'completed' | 'dead-letter'
   readonly error?: string
 }
