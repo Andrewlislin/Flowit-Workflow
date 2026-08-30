@@ -6,6 +6,8 @@ import {
 } from './routing/index.js'
 import { inferExplicitIntentFromTopLevelPrompt } from './routing/intent.js'
 
+export { inferExplicitIntentFromTopLevelPrompt } from './routing/intent.js'
+
 export interface ClaudeRoutingHookInput {
   readonly session_id: string
   readonly hook_event_name: string
