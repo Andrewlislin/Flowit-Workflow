@@ -20,6 +20,7 @@ export const CLAUDE_CODE_MANAGED_FILES = [
   '.claude-plugin/plugin.json',
   'skills/run-bound/SKILL.md',
   'skills/orchestrate/SKILL.md',
+  'skills/route/SKILL.md',
   'hooks/hooks.json',
   '.mcp.json',
 ] as const
@@ -33,6 +34,7 @@ export interface ClaudeCodeSetupPaths {
   readonly sourcePluginManifestFile: string
   readonly sourceRunBoundSkillFile: string
   readonly sourceOrchestrateSkillFile: string
+  readonly sourceRouteSkillFile: string
   readonly mcpServerFile: string
   readonly cliFile: string
 }
@@ -83,6 +85,7 @@ export async function inspectClaudeCodeState(
     assertReadable(paths.sourcePluginManifestFile, 'packaged Claude Code plugin manifest'),
     assertReadable(paths.sourceRunBoundSkillFile, 'packaged Claude run-bound Skill'),
     assertReadable(paths.sourceOrchestrateSkillFile, 'packaged Claude orchestrate Skill'),
+    assertReadable(paths.sourceRouteSkillFile, 'packaged Claude adaptive routing Skill'),
     assertReadable(paths.mcpServerFile, 'Flowit MCP server build artifact'),
     assertReadable(paths.cliFile, 'Flowit CLI build artifact'),
   ])
@@ -139,6 +142,7 @@ export function claudeCodeSetupPaths(
     sourcePluginManifestFile: path.join(context.packageRoot, '.claude-plugin', 'plugin.json'),
     sourceRunBoundSkillFile: path.join(context.packageRoot, 'skills', 'run-bound', 'SKILL.md'),
     sourceOrchestrateSkillFile: path.join(context.packageRoot, 'skills', 'orchestrate', 'SKILL.md'),
+    sourceRouteSkillFile: path.join(context.packageRoot, 'skills', 'route', 'SKILL.md'),
     mcpServerFile: path.join(context.packageRoot, 'dist', 'mcp-server.js'),
     cliFile: path.join(context.packageRoot, 'dist', 'cli.js'),
   }
@@ -167,8 +171,17 @@ export function claudeCodeDoctorChecks(
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [
     state.claudeExecutable
-      ? { id: 'claude-executable', status: 'ok', summary: `Claude Code executable detected at ${state.claudeExecutable}` }
-      : { id: 'claude-executable', status: 'warning', summary: 'Claude Code executable was not found on PATH', repairable: false },
+      ? {
+          id: 'claude-executable',
+          status: 'ok',
+          summary: `Claude Code executable detected at ${state.claudeExecutable}`,
+        }
+      : {
+          id: 'claude-executable',
+          status: 'warning',
+          summary: 'Claude Code executable was not found on PATH',
+          repairable: false,
+        },
   ]
   checks.push(state.conflicts.length
     ? {
@@ -178,11 +191,19 @@ export function claudeCodeDoctorChecks(
         detail: state.conflicts.join(' '),
         repairable: false,
       }
-    : { id: 'claude-ownership', status: 'ok', summary: 'Claude Code plugin ownership is consistent' })
+    : {
+        id: 'claude-ownership',
+        status: 'ok',
+        summary: 'Claude Code plugin ownership is consistent',
+      })
 
   for (const file of state.files) {
     checks.push(file.current.hash === file.desiredHash
-      ? { id: `plugin:${file.relativePath}`, status: 'ok', summary: `${file.relativePath} matches the packaged Flowit plugin` }
+      ? {
+          id: `plugin:${file.relativePath}`,
+          status: 'ok',
+          summary: `${file.relativePath} matches the packaged Flowit plugin`,
+        }
       : {
           id: `plugin:${file.relativePath}`,
           status: 'error',
@@ -191,8 +212,17 @@ export function claudeCodeDoctorChecks(
         })
   }
   checks.push(state.stateRootExists
-    ? { id: 'claude-state-root', status: 'ok', summary: 'Claude durable state directory exists' }
-    : { id: 'claude-state-root', status: 'warning', summary: 'Claude durable state directory has not been initialized', repairable: true })
+    ? {
+        id: 'claude-state-root',
+        status: 'ok',
+        summary: 'Claude durable state directory exists',
+      }
+    : {
+        id: 'claude-state-root',
+        status: 'warning',
+        summary: 'Claude durable state directory has not been initialized',
+        repairable: true,
+      })
   if (options.scope === 'project') {
     checks.push({
       id: 'claude-project-trust',
@@ -237,9 +267,9 @@ function claudeCodeConflicts(
     return conflicts
   }
   if (state.manifest && (
-    state.manifest.hostId !== CLAUDE_CODE_SETUP_HOST_ID
-    || state.manifest.scope !== options.scope
-    || state.manifest.pluginRoot !== state.paths.pluginRoot
+    state.manifest.hostId !== CLAUDE_CODE_SETUP_HOST_ID ||
+    state.manifest.scope !== options.scope ||
+    state.manifest.pluginRoot !== state.paths.pluginRoot
   )) {
     conflicts.push('The Claude Code setup ownership manifest does not match the requested scope/plugin root.')
     return conflicts
@@ -258,18 +288,22 @@ function claudeCodeConflicts(
 async function desiredClaudePluginFiles(
   paths: ClaudeCodeSetupPaths,
 ): Promise<Record<ClaudeCodeManagedFile, string>> {
-  const [packageRaw, pluginRaw, runBound, orchestrate] = await Promise.all([
+  const [packageRaw, pluginRaw, runBound, orchestrate, route] = await Promise.all([
     readFile(paths.packageManifestFile, 'utf8'),
     readFile(paths.sourcePluginManifestFile, 'utf8'),
     readFile(paths.sourceRunBoundSkillFile, 'utf8'),
     readFile(paths.sourceOrchestrateSkillFile, 'utf8'),
+    readFile(paths.sourceRouteSkillFile, 'utf8'),
   ])
   const packageManifest = parseJsonObject(packageRaw, paths.packageManifestFile)
   const sourcePlugin = parseJsonObject(pluginRaw, paths.sourcePluginManifestFile)
   const version = packageManifest.version
-  if (typeof version !== 'string' || !version.trim()) throw new Error('Flowit package version is missing')
+  if (typeof version !== 'string' || !version.trim()) {
+    throw new Error('Flowit package version is missing')
+  }
 
   const pluginManifest = { ...sourcePlugin, name: CLAUDE_CODE_PLUGIN_NAME, version }
+  const routingAuthorityDir = path.join(paths.stateRoot, 'routing-authority')
   const mcp = {
     mcpServers: {
       orchestration: {
@@ -280,15 +314,37 @@ async function desiredClaudePluginFiles(
           FLOWIT_WORKFLOW_PLUGIN_ROOT: paths.pluginRoot,
           FLOWIT_WORKFLOW_CLAUDE_MUTATIONS: '1',
           FLOWIT_WORKFLOW_CLAUDE_ALLOW_LIVE_RESUME: '0',
+          FLOWIT_WORKFLOW_ROUTING_MODE: 'suggest',
+          FLOWIT_WORKFLOW_ROUTING_AUTHORITY_DIR: routingAuthorityDir,
+          FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION: '1',
         },
       },
     },
   }
   const hookEntry = {
-    hooks: [{ type: 'command', command: process.execPath, args: [paths.cliFile, 'claude-hook'], timeout: 10 }],
+    hooks: [{
+      type: 'command',
+      command: process.execPath,
+      args: [paths.cliFile, 'claude-hook'],
+      timeout: 10,
+    }],
+  }
+  const routingHookEntry = {
+    hooks: [{
+      type: 'command',
+      command: process.execPath,
+      args: [paths.cliFile, 'claude-routing-hook'],
+      timeout: 10,
+    }],
   }
   const hooks = {
     hooks: {
+      UserPromptSubmit: [routingHookEntry],
+      PreToolUse: [{
+        matcher:
+          '^mcp__plugin_flowit-workflow_orchestration__(workflow_assess|workflow_prepare|workflow_commit)$',
+        ...routingHookEntry,
+      }],
       SessionStart: [hookEntry],
       Stop: [hookEntry],
       StopFailure: [hookEntry],
@@ -301,24 +357,29 @@ async function desiredClaudePluginFiles(
     '.claude-plugin/plugin.json': `${JSON.stringify(pluginManifest, null, 2)}\n`,
     'skills/run-bound/SKILL.md': runBound,
     'skills/orchestrate/SKILL.md': orchestrate,
+    'skills/route/SKILL.md': route,
     'hooks/hooks.json': `${JSON.stringify(hooks, null, 2)}\n`,
     '.mcp.json': `${JSON.stringify(mcp, null, 2)}\n`,
   }
 }
 
-async function readClaudeSetupManifest(file: string): Promise<ClaudeCodeSetupManifest | undefined> {
+async function readClaudeSetupManifest(
+  file: string,
+): Promise<ClaudeCodeSetupManifest | undefined> {
   try {
     const value = parseJsonObject(await readFile(file, 'utf8'), file)
     if (
-      value.version !== CLAUDE_CODE_SETUP_MANIFEST_VERSION
-      || value.hostId !== CLAUDE_CODE_SETUP_HOST_ID
-      || (value.scope !== 'user' && value.scope !== 'project')
-      || typeof value.projectDir !== 'string'
-      || typeof value.pluginRoot !== 'string'
-      || !isRecord(value.ownedFiles)
-      || Object.values(value.ownedFiles).some(hash => typeof hash !== 'string')
-      || typeof value.installedAt !== 'string'
-    ) throw new Error(`invalid Claude Code setup ownership manifest ${file}`)
+      value.version !== CLAUDE_CODE_SETUP_MANIFEST_VERSION ||
+      value.hostId !== CLAUDE_CODE_SETUP_HOST_ID ||
+      (value.scope !== 'user' && value.scope !== 'project') ||
+      typeof value.projectDir !== 'string' ||
+      typeof value.pluginRoot !== 'string' ||
+      !isRecord(value.ownedFiles) ||
+      Object.values(value.ownedFiles).some(hash => typeof hash !== 'string') ||
+      typeof value.installedAt !== 'string'
+    ) {
+      throw new Error(`invalid Claude Code setup ownership manifest ${file}`)
+    }
     return value as unknown as ClaudeCodeSetupManifest
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
@@ -331,7 +392,9 @@ function parseJsonObject(raw: string, file: string): Record<string, unknown> {
   try {
     value = JSON.parse(raw)
   } catch (error: unknown) {
-    throw new Error(`invalid JSON in ${file}: ${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(
+      `invalid JSON in ${file}: ${error instanceof Error ? error.message : String(error)}`,
+    )
   }
   if (!isRecord(value)) throw new Error(`${file} must contain a JSON object`)
   return value

@@ -1,4 +1,47 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-test('Claude plugin layout declares manifest, lifecycle hooks, and MCP server', async () => { const manifest = JSON.parse(await readFile('.claude-plugin/plugin.json', 'utf8')); const hooks = JSON.parse(await readFile('hooks/hooks.json', 'utf8')); const mcp = JSON.parse(await readFile('.mcp.json', 'utf8')); assert.equal(manifest.name, 'flowit-workflow'); for (const event of ['SessionStart','Stop','StopFailure','TaskCompleted','SubagentStop','SessionEnd']) assert.ok(Array.isArray(hooks.hooks[event]), `missing ${event} hook`); assert.equal(mcp.mcpServers.orchestration.command, 'node'); assert.ok(mcp.mcpServers.orchestration.args[0].includes('${CLAUDE_PLUGIN_ROOT}')) })
+
+const CLAUDE_PLUGIN_ADAPTIVE_MATCHER =
+  '^mcp__plugin_flowit-workflow_orchestration__(workflow_assess|workflow_prepare|workflow_commit)$'
+
+test('Claude plugin layout declares manifest, lifecycle hooks, trusted caller hooks, MCP server, and adaptive route Skill', async () => {
+  const manifest = JSON.parse(await readFile('.claude-plugin/plugin.json', 'utf8'))
+  const hooks = JSON.parse(await readFile('hooks/hooks.json', 'utf8'))
+  const mcp = JSON.parse(await readFile('.mcp.json', 'utf8'))
+  const route = await readFile('skills/route/SKILL.md', 'utf8')
+  assert.equal(manifest.name, 'flowit-workflow')
+  for (const event of [
+    'UserPromptSubmit',
+    'PreToolUse',
+    'SessionStart',
+    'Stop',
+    'StopFailure',
+    'TaskCompleted',
+    'SubagentStop',
+    'SessionEnd',
+  ]) {
+    assert.ok(Array.isArray(hooks.hooks[event]), `missing ${event} hook`)
+  }
+  assert.deepEqual(
+    hooks.hooks.UserPromptSubmit[0].hooks[0].args,
+    ['${CLAUDE_PLUGIN_ROOT}/dist/cli.js', 'claude-routing-hook'],
+  )
+  assert.equal(hooks.hooks.PreToolUse[0].matcher, CLAUDE_PLUGIN_ADAPTIVE_MATCHER)
+  assert.equal(
+    hooks.hooks.PreToolUse[0].matcher.startsWith('mcp__orchestration__'),
+    false,
+  )
+  assert.deepEqual(
+    hooks.hooks.PreToolUse[0].hooks[0].args,
+    ['${CLAUDE_PLUGIN_ROOT}/dist/cli.js', 'claude-routing-hook'],
+  )
+  assert.equal(mcp.mcpServers.orchestration.command, 'node')
+  assert.ok(mcp.mcpServers.orchestration.args[0].includes('${CLAUDE_PLUGIN_ROOT}'))
+  assert.match(route, /workflow_assess/)
+  assert.match(route, /confirmationToken/)
+  assert.match(route, /confirmationCode/)
+  assert.match(route, /callerToken/)
+  assert.match(route, /Never recurse|Never manufacture/i)
+  assert.doesNotMatch(route, /disable-model-invocation:\s*true/)
+})
