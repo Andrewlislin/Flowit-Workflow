@@ -5,12 +5,12 @@ import path from 'node:path'
 import test from 'node:test'
 import {
   handleClaudeRoutingHook,
-  inferExplicitIntentFromTopLevelPrompt,
   type ClaudeRoutingHookOutput,
 } from '../src/claude-routing-hook.js'
 import {
   RoutingAuthorityService,
   createRoutingAuthorityFromEnvironment,
+  inferExplicitIntentFromTopLevelPrompt,
 } from '../src/routing/index.js'
 
 const SECRET = 'routing-test-secret-that-is-at-least-32-bytes-long'
