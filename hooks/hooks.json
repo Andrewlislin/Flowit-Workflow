@@ -14,7 +14,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__orchestration__(workflow_assess|workflow_prepare|workflow_commit)",
+        "matcher": "^mcp__plugin_flowit-workflow_orchestration__(workflow_assess|workflow_prepare|workflow_commit)$",
         "hooks": [
           {
             "type": "command",

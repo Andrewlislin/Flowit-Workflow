@@ -63,6 +63,11 @@ type ProposalChoiceAttempt =
     }
   | { readonly kind: 'invalid' }
 
+const ADAPTIVE_WORKFLOW_TOOL_PREFIXES = [
+  'mcp__plugin_flowit-workflow_orchestration__',
+  'mcp__orchestration__',
+] as const
+
 export function handleClaudeRoutingHook(
   input: ClaudeRoutingHookInput,
   authority: RoutingAuthorityService = createRoutingAuthorityFromEnvironment(),
@@ -269,8 +274,10 @@ function parseRoutingChoice(
 
 function adaptiveWorkflowToolName(value: unknown): RoutingWorkflowToolName | undefined {
   if (typeof value !== 'string') return undefined
-  const prefix = 'mcp__orchestration__'
-  if (!value.startsWith(prefix)) return undefined
+  const prefix = ADAPTIVE_WORKFLOW_TOOL_PREFIXES.find(candidate =>
+    value.startsWith(candidate),
+  )
+  if (!prefix) return undefined
   const name = value.slice(prefix.length)
   if (
     name === 'workflow_assess' ||

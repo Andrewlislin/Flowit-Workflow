@@ -342,7 +342,7 @@ async function desiredClaudePluginFiles(
       UserPromptSubmit: [routingHookEntry],
       PreToolUse: [{
         matcher:
-          'mcp__orchestration__(workflow_assess|workflow_prepare|workflow_commit)',
+          '^mcp__plugin_flowit-workflow_orchestration__(workflow_assess|workflow_prepare|workflow_commit)$',
         ...routingHookEntry,
       }],
       SessionStart: [hookEntry],

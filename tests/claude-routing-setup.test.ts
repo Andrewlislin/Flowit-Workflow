@@ -9,7 +9,10 @@ import {
   type SetupRequestOptions,
 } from '../src/setup/index.js'
 
-test('Claude setup wires prompt authority and PreToolUse caller attestation to the same routing state used by MCP', async () => {
+const CLAUDE_PLUGIN_ADAPTIVE_MATCHER =
+  '^mcp__plugin_flowit-workflow_orchestration__(workflow_assess|workflow_prepare|workflow_commit)$'
+
+test('Claude setup wires prompt authority and PreToolUse caller attestation to the plugin-scoped MCP tools', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-claude-routing-setup-'))
   const home = path.join(root, 'home')
   const project = path.join(root, 'project')
@@ -65,9 +68,10 @@ test('Claude setup wires prompt authority and PreToolUse caller attestation to t
       hooks.hooks.UserPromptSubmit[0].hooks[0].args,
       [path.join(packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],
     )
-    assert.match(
-      hooks.hooks.PreToolUse[0].matcher,
-      /workflow_assess.*workflow_prepare.*workflow_commit/,
+    assert.equal(hooks.hooks.PreToolUse[0].matcher, CLAUDE_PLUGIN_ADAPTIVE_MATCHER)
+    assert.equal(
+      hooks.hooks.PreToolUse[0].matcher.startsWith('mcp__orchestration__'),
+      false,
     )
     assert.deepEqual(
       hooks.hooks.PreToolUse[0].hooks[0].args,

@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
+const CLAUDE_PLUGIN_ADAPTIVE_MATCHER =
+  '^mcp__plugin_flowit-workflow_orchestration__(workflow_assess|workflow_prepare|workflow_commit)$'
+
 test('Claude plugin layout declares manifest, lifecycle hooks, trusted caller hooks, MCP server, and adaptive route Skill', async () => {
   const manifest = JSON.parse(await readFile('.claude-plugin/plugin.json', 'utf8'))
   const hooks = JSON.parse(await readFile('hooks/hooks.json', 'utf8'))
@@ -24,9 +27,10 @@ test('Claude plugin layout declares manifest, lifecycle hooks, trusted caller ho
     hooks.hooks.UserPromptSubmit[0].hooks[0].args,
     ['${CLAUDE_PLUGIN_ROOT}/dist/cli.js', 'claude-routing-hook'],
   )
-  assert.match(
-    hooks.hooks.PreToolUse[0].matcher,
-    /workflow_assess.*workflow_prepare.*workflow_commit/,
+  assert.equal(hooks.hooks.PreToolUse[0].matcher, CLAUDE_PLUGIN_ADAPTIVE_MATCHER)
+  assert.equal(
+    hooks.hooks.PreToolUse[0].matcher.startsWith('mcp__orchestration__'),
+    false,
   )
   assert.deepEqual(
     hooks.hooks.PreToolUse[0].hooks[0].args,
