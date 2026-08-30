@@ -147,6 +147,59 @@ test('two workers observing one scheduled pipeline occurrence execute its node o
   }
 })
 
+test('runtime disposal waits for an in-flight schedule lease renewal', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'flowit-scheduler-dispose-'))
+  const file = path.join(dir, 'state.json')
+  const adapter = new AbortAwareScheduledPipelineAdapter()
+  const core = new FlowitOrchestrationCore(
+    {
+      storageFile: file,
+      defaultAdapterId: adapter.id,
+      workerId: 'scheduler-dispose-worker',
+      leaseDurationMs: 1_000,
+    },
+    [adapter],
+  )
+  let releaseRenewal!: () => void
+  const renewalBarrier = new Promise<void>(resolve => { releaseRenewal = resolve })
+  let observeRenewal!: () => void
+  const renewalStarted = new Promise<void>(resolve => { observeRenewal = resolve })
+  const renewRunLease = core.store.renewRunLease.bind(core.store)
+  core.store.renewRunLease = async (...args) => {
+    observeRenewal()
+    await renewalBarrier
+    return renewRunLease(...args)
+  }
+  try {
+    await core.ready
+    await core.scheduler.create({
+      name: 'dispose waits for renewal',
+      target: {
+        adapterId: adapter.id,
+        sessionId: 'target',
+        prompt: 'scheduled work',
+        skills: [],
+        contextRefs: [],
+      },
+      timing: { kind: 'at', at: new Date(Date.now() + 100).toISOString() },
+    })
+    await renewalStarted
+
+    let disposed = false
+    const disposal = core.dispose().then(() => { disposed = true })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    assert.equal(disposed, false)
+
+    releaseRenewal()
+    await disposal
+    assert.equal(disposed, true)
+  } finally {
+    releaseRenewal()
+    await core.dispose()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('cancelling a scheduled pipeline does not let generic pipeline recovery revive it', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'flowit-scheduled-cancel-'))
   const file = path.join(dir, 'state.json')

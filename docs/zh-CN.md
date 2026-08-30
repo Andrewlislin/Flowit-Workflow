@@ -6,7 +6,7 @@
 
 为保持兼容性，技术标识继续使用英文：
 
-- npm 包：`@coaseedge/flowit-workflow`
+- npm 包：`@coaseedgeltd/flowit-workflow`
 - CLI：`flowit-workflow`
 - 协议、配置键和内部 Host/Preset ID：保持现有稳定标识
 

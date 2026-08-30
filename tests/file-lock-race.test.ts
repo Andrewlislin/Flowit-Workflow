@@ -3,7 +3,7 @@ import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { withGenerationFileLock } from '@coaseedge/flowit-core/internal/file-lock'
+import { withGenerationFileLock } from '@coaseedgeltd/flowit-core/internal/file-lock'
 
 function deadPid(): number {
   return 2_147_483_647

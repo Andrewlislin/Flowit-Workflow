@@ -1,4 +1,4 @@
-# @coaseedge/flowit-core
+# @coaseedgeltd/flowit-core
 
 Host-agnostic durable orchestration core for Flowit Workflow.
 

@@ -32,7 +32,7 @@ test('Claude setup wires prompt authority and PreToolUse caller attestation to t
     await Promise.all([
       writeFile(
         path.join(packageRoot, 'package.json'),
-        JSON.stringify({ name: '@coaseedge/flowit-workflow', version: '0.5.0-beta.1' }),
+        JSON.stringify({ name: '@coaseedgeltd/flowit-workflow', version: '0.5.0-beta.2' }),
       ),
       writeFile(
         path.join(packageRoot, '.claude-plugin', 'plugin.json'),

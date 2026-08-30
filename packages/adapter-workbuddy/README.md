@@ -1,4 +1,4 @@
-# @coaseedge/flowit-adapter-workbuddy
+# @coaseedgeltd/flowit-adapter-workbuddy
 
 WorkBuddy adapter for Flowit Workflow.
 

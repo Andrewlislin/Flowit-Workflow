@@ -1,4 +1,4 @@
-# @coaseedge/flowit-adapter-opencode
+# @coaseedgeltd/flowit-adapter-opencode
 
 OpenCode V2 adapter for Flowit Workflow.
 

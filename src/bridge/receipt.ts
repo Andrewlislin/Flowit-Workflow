@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-core/bridge/receipt'
+export * from '@coaseedgeltd/flowit-core/bridge/receipt'

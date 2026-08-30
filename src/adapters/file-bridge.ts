@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-adapter-file-bridge'
+export * from '@coaseedgeltd/flowit-adapter-file-bridge'

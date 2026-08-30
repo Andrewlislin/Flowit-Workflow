@@ -1,4 +1,4 @@
-# @coaseedge/flowit-adapter-doubao-office
+# @coaseedgeltd/flowit-adapter-doubao-office
 
 Doubao Office bridge adapter for Flowit Workflow.
 

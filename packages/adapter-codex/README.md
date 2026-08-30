@@ -1,4 +1,4 @@
-# @coaseedge/flowit-adapter-codex
+# @coaseedgeltd/flowit-adapter-codex
 
 Codex App Server adapter for Flowit Workflow.
 

@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto'
 import { open, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import type { AgentEvent, AgentSessionDescriptor } from '@coaseedge/flowit-core'
+import type { AgentEvent, AgentSessionDescriptor } from '@coaseedgeltd/flowit-core'
 import {
   durableAppendText,
   durableReplaceText,
   withGenerationFileLock,
-} from '@coaseedge/flowit-core/internal/file-lock'
+} from '@coaseedgeltd/flowit-core/internal/file-lock'
 
 export interface ClaudeSessionRecord extends AgentSessionDescriptor {
   adapterId: 'claude-code'

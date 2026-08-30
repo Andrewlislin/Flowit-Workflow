@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-adapter-dsh'
+export * from '@coaseedgeltd/flowit-adapter-dsh'

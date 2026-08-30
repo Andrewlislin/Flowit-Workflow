@@ -110,7 +110,7 @@ jobs:
             chmod 0600 "${HOME}/.npmrc"
             echo "Configured NPM_TOKEN fallback."
           else
-            echo "NPM_TOKEN is not configured; npm publish will use Trusted Publishing/OIDC if the @coaseedge packages authorize this workflow."
+            echo "NPM_TOKEN is not configured; npm publish will use Trusted Publishing/OIDC if the @coaseedgeltd packages authorize this workflow."
           fi
 
       - name: Publish exact tarballs to npm beta
@@ -131,12 +131,12 @@ jobs:
             npm publish "${tarball}" --access public --tag beta --provenance
           }
 
-          publish_one '@coaseedge/flowit-core' ".tmp-packs/coaseedge-flowit-core-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-adapter-file-bridge' ".tmp-packs/coaseedge-flowit-adapter-file-bridge-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-adapter-claude-code' ".tmp-packs/coaseedge-flowit-adapter-claude-code-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-adapter-codex' ".tmp-packs/coaseedge-flowit-adapter-codex-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-adapter-opencode' ".tmp-packs/coaseedge-flowit-adapter-opencode-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-adapter-dsh' ".tmp-packs/coaseedge-flowit-adapter-dsh-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-adapter-workbuddy' ".tmp-packs/coaseedge-flowit-adapter-workbuddy-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-adapter-doubao-office' ".tmp-packs/coaseedge-flowit-adapter-doubao-office-${VERSION}.tgz"
-          publish_one '@coaseedge/flowit-workflow' ".tmp-packs/coaseedge-flowit-workflow-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-core' ".tmp-packs/coaseedgeltd-flowit-core-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-adapter-file-bridge' ".tmp-packs/coaseedgeltd-flowit-adapter-file-bridge-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-adapter-claude-code' ".tmp-packs/coaseedgeltd-flowit-adapter-claude-code-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-adapter-codex' ".tmp-packs/coaseedgeltd-flowit-adapter-codex-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-adapter-opencode' ".tmp-packs/coaseedgeltd-flowit-adapter-opencode-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-adapter-dsh' ".tmp-packs/coaseedgeltd-flowit-adapter-dsh-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-adapter-workbuddy' ".tmp-packs/coaseedgeltd-flowit-adapter-workbuddy-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-adapter-doubao-office' ".tmp-packs/coaseedgeltd-flowit-adapter-doubao-office-${VERSION}.tgz"
+          publish_one '@coaseedgeltd/flowit-workflow' ".tmp-packs/coaseedgeltd-flowit-workflow-${VERSION}.tgz"

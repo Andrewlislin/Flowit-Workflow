@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-reference'
 import type {} from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-tools'
-import { FlowitOrchestrationCore } from '@coaseedge/flowit-core'
+import { FlowitOrchestrationCore } from '@coaseedgeltd/flowit-core'
 import { DshAgentAdapter, DSH_ADAPTER_ID } from '../adapters/dsh.js'
 import { registerDshWorkflowTools } from './tools.js'
 

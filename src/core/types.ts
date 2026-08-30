@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-core/core/types'
+export * from '@coaseedgeltd/flowit-core/core/types'

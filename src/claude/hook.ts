@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-adapter-claude-code/hook'
+export * from '@coaseedgeltd/flowit-adapter-claude-code/hook'

@@ -88,12 +88,12 @@ A GitHub Actions run with `runner_id=0` and `steps=[]` is neither code-failure e
 
 | Package | Dependency boundary |
 | --- | --- |
-| `@coaseedge/flowit-core` | Host-agnostic orchestration Core; no third-party runtime dependencies or peers. |
-| `@coaseedge/flowit-adapter-claude-code` | Claude Code integration; depends only on Core. |
-| `@coaseedge/flowit-adapter-opencode` | OpenCode integration; owns exact `@opencode-ai/sdk@1.18.23`. |
-| `@coaseedge/flowit-adapter-codex` | Codex App Server integration; depends only on Core. |
-| `@coaseedge/flowit-adapter-dsh` | DSH integration; DeepSeek Harness SDKs are explicit host-owned peer dependencies. |
-| `@coaseedge/flowit-adapter-file-bridge` | Generic Bridge integration. |
-| `@coaseedge/flowit-adapter-workbuddy` | WorkBuddy integration over the File Bridge package. |
-| `@coaseedge/flowit-adapter-doubao-office` | Doubao Office integration over the File Bridge package. |
-| `@coaseedge/flowit-workflow` | Full/convenience distribution aggregating every built-in adapter while preserving the legacy import surface. |
+| `@coaseedgeltd/flowit-core` | Host-agnostic orchestration Core; no third-party runtime dependencies or peers. |
+| `@coaseedgeltd/flowit-adapter-claude-code` | Claude Code integration; depends only on Core. |
+| `@coaseedgeltd/flowit-adapter-opencode` | OpenCode integration; owns exact `@opencode-ai/sdk@1.18.23`. |
+| `@coaseedgeltd/flowit-adapter-codex` | Codex App Server integration; depends only on Core. |
+| `@coaseedgeltd/flowit-adapter-dsh` | DSH integration; DeepSeek Harness SDKs are explicit host-owned peer dependencies. |
+| `@coaseedgeltd/flowit-adapter-file-bridge` | Generic Bridge integration. |
+| `@coaseedgeltd/flowit-adapter-workbuddy` | WorkBuddy integration over the File Bridge package. |
+| `@coaseedgeltd/flowit-adapter-doubao-office` | Doubao Office integration over the File Bridge package. |
+| `@coaseedgeltd/flowit-workflow` | Full/convenience distribution aggregating every built-in adapter while preserving the legacy import surface. |

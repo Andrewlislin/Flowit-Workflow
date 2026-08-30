@@ -254,7 +254,7 @@ export class RunOncePipelineRuntime {
       }
       await this.store.completeRun(running.id, this.options.workerId)
     } catch (error: unknown) {
-      heartbeat.stop()
+      await heartbeat.stop()
       if (this.disposeController.signal.aborted || heartbeat.signal.aborted) throw error
       const message = error instanceof Error ? error.message : String(error)
       if (running.attempt >= this.options.maxAttempts) {
@@ -275,7 +275,7 @@ export class RunOncePipelineRuntime {
       }
       throw error
     } finally {
-      heartbeat.stop()
+      await heartbeat.stop()
     }
   }
 }

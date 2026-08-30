@@ -5,7 +5,7 @@ import type {
   AgentDispatchResult,
   AgentEvent,
   AgentSessionDescriptor,
-} from '@coaseedge/flowit-core'
+} from '@coaseedgeltd/flowit-core'
 import {
   ClaudeEventCursor,
   ClaudeEventJournal,

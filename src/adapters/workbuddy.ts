@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-adapter-workbuddy'
+export * from '@coaseedgeltd/flowit-adapter-workbuddy'

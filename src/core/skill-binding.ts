@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-core/core/skill-binding'
+export * from '@coaseedgeltd/flowit-core/core/skill-binding'

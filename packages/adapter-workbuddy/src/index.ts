@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import type { AgentDispatchRequest, AgentDispatchResult } from '@coaseedge/flowit-core'
-import { FileBridgeAgentAdapter, type FileBridgeAdapterConfig } from '@coaseedge/flowit-adapter-file-bridge'
+import type { AgentDispatchRequest, AgentDispatchResult } from '@coaseedgeltd/flowit-core'
+import { FileBridgeAgentAdapter, type FileBridgeAdapterConfig } from '@coaseedgeltd/flowit-adapter-file-bridge'
 
 export const WORKBUDDY_ADAPTER_ID = 'workbuddy'
 export interface WorkBuddyAdapterConfig extends Omit<FileBridgeAdapterConfig, 'adapterId'> { dispatchCommand?: string[]; mode?: 'desktop-bridge' | 'managed-agent-driver' }

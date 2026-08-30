@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-adapter-doubao-office'
+export * from '@coaseedgeltd/flowit-adapter-doubao-office'

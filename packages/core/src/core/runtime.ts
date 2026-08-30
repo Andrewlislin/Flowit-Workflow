@@ -111,11 +111,11 @@ export class FlowitOrchestrationCore {
     if (this.disposed) return
     this.disposed = true
     this.startupController.abort(new Error('Flowit Orchestration Core disposed during startup'))
-    this.scheduler.dispose()
+    const schedulerStop = this.scheduler.dispose()
     const runOnceStop = this.runOncePipelines.dispose()
     const pipelineStop = this.pipelines.dispose()
     await this.adapters.dispose()
-    await Promise.all([runOnceStop, pipelineStop])
+    await Promise.all([schedulerStop, runOnceStop, pipelineStop])
     await settleWithin(this.ready, DISPOSE_READY_GRACE_MS)
   }
 

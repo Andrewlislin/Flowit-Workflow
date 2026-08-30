@@ -16,24 +16,24 @@ const get = name => {
   return row.manifest
 }
 
-const core = get('@coaseedge/flowit-core')
+const core = get('@coaseedgeltd/flowit-core')
 if (Object.keys(core.dependencies ?? {}).length || Object.keys(core.peerDependencies ?? {}).length) {
-  throw new Error('@coaseedge/flowit-core must stay free of third-party runtime dependencies and peers')
+  throw new Error('@coaseedgeltd/flowit-core must stay free of third-party runtime dependencies and peers')
 }
 
-const openCode = get('@coaseedge/flowit-adapter-opencode')
+const openCode = get('@coaseedgeltd/flowit-adapter-opencode')
 if (openCode.dependencies?.['@opencode-ai/sdk'] !== '1.18.23') {
   throw new Error('OpenCode adapter must own and pin @opencode-ai/sdk@1.18.23')
 }
 
-const dsh = get('@coaseedge/flowit-adapter-dsh')
+const dsh = get('@coaseedgeltd/flowit-adapter-dsh')
 const dshPeers = Object.keys(dsh.peerDependencies ?? {})
 if (!dshPeers.length || dshPeers.some(name => !name.startsWith('@deepseek-ai/'))) {
   throw new Error('DSH host SDKs must stay peer dependencies of the DSH adapter')
 }
 
 for (const name of manifests.keys()) {
-  if (!name.startsWith('@coaseedge/flowit-')) throw new Error(`unexpected workspace package ${name}`)
+  if (!name.startsWith('@coaseedgeltd/flowit-')) throw new Error(`unexpected workspace package ${name}`)
   if (root.dependencies?.[name] !== 'workspace:*') {
     throw new Error(`full package must aggregate ${name} through workspace:*`)
   }
@@ -71,7 +71,7 @@ for (const filename of compatibilityWrappers) {
 console.log(`Package boundary policy passed for ${manifests.size} workspace packages.`)
 
 function assertPureWorkspaceReExport(filename, source) {
-  const statement = /export\s+\*\s+from\s+(['"])(@coaseedge\/flowit-[^'"]+)\1\s*;?/gy
+  const statement = /export\s+\*\s+from\s+(['"])(@coaseedgeltd\/flowit-[^'"]+)\1\s*;?/gy
   let offset = 0
   let exports = 0
   while (offset < source.length) {

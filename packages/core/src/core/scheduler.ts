@@ -14,6 +14,7 @@ export class DurableScheduler {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly armedAt = new Map<string, string>()
   private readonly localControllers = new Map<string, AbortController>()
+  private readonly localTasks = new Set<Promise<void>>()
   private reconcileTimer: ReturnType<typeof setInterval> | undefined
   private disposed = false
 
@@ -28,10 +29,10 @@ export class DurableScheduler {
   }
   async list(): Promise<ScheduledTask[]> { return (await this.store.snapshot()).schedules }
   async cancel(id: string): Promise<ScheduledTask> { const updated = await this.store.transact(state => { const index = state.schedules.findIndex(task => task.id === id); if (index < 0) throw new Error(`unknown schedule ${id}`); const current = state.schedules[index]!; const { nextRunAt: _nextRunAt, ...rest } = current; const next: ScheduledTask = { ...rest, status: 'cancelled', updatedAt: new Date().toISOString() }; state.schedules[index] = next; return next }); this.localControllers.get(id)?.abort(new Error(`schedule ${id} cancelled`)); this.clear(id); return updated }
-  dispose(): void { this.disposed = true; if (this.reconcileTimer) clearInterval(this.reconcileTimer); this.reconcileTimer = undefined; for (const controller of this.localControllers.values()) controller.abort(new Error('scheduler disposed')); this.localControllers.clear(); for (const timer of this.timers.values()) clearTimeout(timer); this.timers.clear(); this.armedAt.clear() }
+  async dispose(): Promise<void> { this.disposed = true; if (this.reconcileTimer) clearInterval(this.reconcileTimer); this.reconcileTimer = undefined; for (const controller of this.localControllers.values()) controller.abort(new Error('scheduler disposed')); for (const timer of this.timers.values()) clearTimeout(timer); this.timers.clear(); this.armedAt.clear(); await Promise.allSettled([...this.localTasks]); this.localControllers.clear() }
 
   private async reconcile(): Promise<void> { if (this.disposed) return; const active = (await this.store.snapshot()).schedules.filter(task => task.status === 'active' && task.nextRunAt); const activeIds = new Set(active.map(task => task.id)); for (const id of this.timers.keys()) if (!activeIds.has(id)) this.clear(id); for (const task of active) { if (this.localControllers.has(task.id)) continue; if (this.armedAt.get(task.id) !== task.nextRunAt) this.arm(task) } }
-  private arm(task: ScheduledTask): void { this.clear(task.id); if (this.disposed || task.status !== 'active' || !task.nextRunAt) return; const delay = Math.max(0, Date.parse(task.nextRunAt) - Date.now()); this.armedAt.set(task.id, task.nextRunAt); this.timers.set(task.id, setTimeout(() => void this.onTimer(task.id).catch(() => undefined), Math.min(delay, MAX_TIMER_MS))) }
+  private arm(task: ScheduledTask): void { this.clear(task.id); if (this.disposed || task.status !== 'active' || !task.nextRunAt) return; const delay = Math.max(0, Date.parse(task.nextRunAt) - Date.now()); this.armedAt.set(task.id, task.nextRunAt); this.timers.set(task.id, setTimeout(() => { const work = this.onTimer(task.id); this.localTasks.add(work); void work.catch(() => undefined).finally(() => this.localTasks.delete(work)) }, Math.min(delay, MAX_TIMER_MS))) }
 
   private async onTimer(id: string): Promise<void> {
     this.timers.delete(id); this.armedAt.delete(id); if (this.disposed || this.localControllers.has(id)) return
@@ -51,7 +52,7 @@ export class DurableScheduler {
       signal.throwIfAborted(); const completedAt = new Date(); await this.store.completeRun(claim.run.id, this.options.workerId, completedAt); await this.settleOccurrence(task, scheduledAt, triggerKey, 'completed', completedAt)
     }
     catch (error: unknown) { const failedAt = new Date(); const message = error instanceof Error ? error.message : String(error); const deadLetter = claim.run.attempt >= this.options.maxAttempts; try { await this.store.failRun(claim.run.id, this.options.workerId, message, { retryDelayMs: this.options.retryDelayMs, deadLetter }, failedAt) } catch {} if (deadLetter) await this.settleOccurrence(task, scheduledAt, triggerKey, 'failed', failedAt) }
-    finally { heartbeat.stop(); this.localControllers.delete(id) }
+    finally { await heartbeat.stop(); this.localControllers.delete(id) }
   }
 
   private async settleOccurrence(task: ScheduledTask, scheduledAt: string, triggerKey: string, outcome: 'completed' | 'failed', at = new Date()): Promise<void> {

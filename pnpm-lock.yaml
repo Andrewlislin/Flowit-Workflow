@@ -8,28 +8,28 @@ importers:
 
   .:
     dependencies:
-      '@coaseedge/flowit-adapter-claude-code':
+      '@coaseedgeltd/flowit-adapter-claude-code':
         specifier: workspace:*
         version: link:packages/adapter-claude-code
-      '@coaseedge/flowit-adapter-codex':
+      '@coaseedgeltd/flowit-adapter-codex':
         specifier: workspace:*
         version: link:packages/adapter-codex
-      '@coaseedge/flowit-adapter-doubao-office':
+      '@coaseedgeltd/flowit-adapter-doubao-office':
         specifier: workspace:*
         version: link:packages/adapter-doubao-office
-      '@coaseedge/flowit-adapter-dsh':
+      '@coaseedgeltd/flowit-adapter-dsh':
         specifier: workspace:*
         version: link:packages/adapter-dsh
-      '@coaseedge/flowit-adapter-file-bridge':
+      '@coaseedgeltd/flowit-adapter-file-bridge':
         specifier: workspace:*
         version: link:packages/adapter-file-bridge
-      '@coaseedge/flowit-adapter-opencode':
+      '@coaseedgeltd/flowit-adapter-opencode':
         specifier: workspace:*
         version: link:packages/adapter-opencode
-      '@coaseedge/flowit-adapter-workbuddy':
+      '@coaseedgeltd/flowit-adapter-workbuddy':
         specifier: workspace:*
         version: link:packages/adapter-workbuddy
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:packages/core
       '@deepseek-ai/cordis':
@@ -75,28 +75,28 @@ importers:
 
   packages/adapter-claude-code:
     dependencies:
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:../core
 
   packages/adapter-codex:
     dependencies:
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:../core
 
   packages/adapter-doubao-office:
     dependencies:
-      '@coaseedge/flowit-adapter-file-bridge':
+      '@coaseedgeltd/flowit-adapter-file-bridge':
         specifier: workspace:*
         version: link:../adapter-file-bridge
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:../core
 
   packages/adapter-dsh:
     dependencies:
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:../core
       '@deepseek-ai/cordis':
@@ -129,13 +129,13 @@ importers:
 
   packages/adapter-file-bridge:
     dependencies:
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:../core
 
   packages/adapter-opencode:
     dependencies:
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:../core
       '@opencode-ai/sdk':
@@ -144,10 +144,10 @@ importers:
 
   packages/adapter-workbuddy:
     dependencies:
-      '@coaseedge/flowit-adapter-file-bridge':
+      '@coaseedgeltd/flowit-adapter-file-bridge':
         specifier: workspace:*
         version: link:../adapter-file-bridge
-      '@coaseedge/flowit-core':
+      '@coaseedgeltd/flowit-core':
         specifier: workspace:*
         version: link:../core
 

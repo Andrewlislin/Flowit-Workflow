@@ -1,4 +1,4 @@
-# @coaseedge/flowit-adapter-claude-code
+# @coaseedgeltd/flowit-adapter-claude-code
 
 Claude Code adapter for Flowit Workflow.
 

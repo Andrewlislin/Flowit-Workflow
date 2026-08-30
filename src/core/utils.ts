@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-core/core/utils'
+export * from '@coaseedgeltd/flowit-core/core/utils'

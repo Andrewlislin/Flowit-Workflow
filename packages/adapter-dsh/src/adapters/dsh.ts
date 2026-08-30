@@ -10,7 +10,7 @@ import type {
   AgentDispatchResult,
   AgentEvent,
   AgentSessionDescriptor,
-} from '@coaseedge/flowit-core'
+} from '@coaseedgeltd/flowit-core'
 
 export const DSH_ADAPTER_ID = 'deepseek-harness'
 

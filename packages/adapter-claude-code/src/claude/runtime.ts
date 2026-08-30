@@ -1,6 +1,6 @@
 import os from 'node:os'
 import path from 'node:path'
-import { FlowitOrchestrationCore } from '@coaseedge/flowit-core'
+import { FlowitOrchestrationCore } from '@coaseedgeltd/flowit-core'
 import { ClaudeCodeAgentAdapter, CLAUDE_CODE_ADAPTER_ID, type ClaudeCodeAdapterConfig } from '../adapters/claude-code.js'
 
 export interface ClaudeCodeRuntimeConfig { storageFile?: string; minimumIntervalSeconds?: number; maxRunHistory?: number; adapter?: ClaudeCodeAdapterConfig; activeWorkers?: boolean }

@@ -8,7 +8,7 @@ import type {
   AgentDispatchResult,
   AgentEvent,
   AgentSessionDescriptor,
-} from '@coaseedge/flowit-core'
+} from '@coaseedgeltd/flowit-core'
 import {
   bridgeStatePaths,
   readBridgeCursor,
@@ -17,11 +17,11 @@ import {
   upsertBridgeSession,
   writeBridgeCursor,
   type BridgeStatePaths,
-} from '@coaseedge/flowit-core/bridge/state'
+} from '@coaseedgeltd/flowit-core/bridge/state'
 import {
   publishCompletedBridgeReceipt,
   readCompletedBridgeReceipt,
-} from '@coaseedge/flowit-core/bridge/receipt'
+} from '@coaseedgeltd/flowit-core/bridge/receipt'
 
 export interface FileBridgeAdapterConfig {
   adapterId: string

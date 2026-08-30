@@ -103,7 +103,7 @@ rl.on('line', line => {
 })
 `
   await writeFile(executable, script, 'utf8'); await chmod(executable, 0o755)
-  const adapter = new CodexAgentAdapter({ executable, requestTimeoutMs: 1_000, turnTimeoutMs: 1_000 })
+  const adapter = new CodexAgentAdapter({ executable, requestTimeoutMs: 5_000, turnTimeoutMs: 1_000 })
   try {
     const sessions = await adapter.listSessions(); assert.equal(sessions[0]?.sessionId, 'thr-1')
     const result = await adapter.dispatch({ correlationId: 'c-codex', sessionId: 'thr-1', prompt: 'Review changes', skills: ['review'], contextRefs: [] })

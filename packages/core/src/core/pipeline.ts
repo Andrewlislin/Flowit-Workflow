@@ -215,7 +215,7 @@ export class PipelineRuntime {
       await this.store.completeRun(running.id, this.options.workerId)
       return 'completed'
     } catch (error: unknown) { const message = error instanceof Error ? error.message : String(error); try { await this.store.failRun(running.id, this.options.workerId, message, { retryDelayMs: this.options.retryDelayMs, deadLetter: running.attempt >= this.options.maxAttempts }) } catch {} throw error }
-    finally { heartbeat.stop() }
+    finally { await heartbeat.stop() }
   }
 }
 

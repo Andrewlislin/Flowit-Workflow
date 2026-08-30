@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-adapter-codex'
+export * from '@coaseedgeltd/flowit-adapter-codex'

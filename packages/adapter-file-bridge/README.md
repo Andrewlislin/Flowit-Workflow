@@ -1,4 +1,4 @@
-# @coaseedge/flowit-adapter-file-bridge
+# @coaseedgeltd/flowit-adapter-file-bridge
 
 Generic file-bridge adapter for Flowit Workflow.
 

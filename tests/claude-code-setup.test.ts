@@ -37,7 +37,7 @@ async function fixture(withClaude = true): Promise<Fixture> {
     mkdir(bin, { recursive: true }),
   ])
   await Promise.all([
-    writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@coaseedge/flowit-workflow', version: '0.4.0' }), 'utf8'),
+    writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@coaseedgeltd/flowit-workflow', version: '0.4.0' }), 'utf8'),
     writeFile(path.join(packageRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'flowit-workflow', version: '0.2.0', description: 'fixture' }), 'utf8'),
     writeFile(path.join(packageRoot, 'skills', 'run-bound', 'SKILL.md'), '---\nname: run-bound\n---\nrun bound\n', 'utf8'),
     writeFile(path.join(packageRoot, 'skills', 'orchestrate', 'SKILL.md'), '---\nname: orchestrate\n---\norchestrate\n', 'utf8'),

@@ -7,7 +7,7 @@ import type {
   AgentDispatchResult,
   AgentEvent,
   AgentSessionDescriptor,
-} from '@coaseedge/flowit-core'
+} from '@coaseedgeltd/flowit-core'
 
 export const CODEX_ADAPTER_ID = 'codex'
 export type JsonRpcId = string | number

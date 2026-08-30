@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-core/core/pipeline'
+export * from '@coaseedgeltd/flowit-core/core/pipeline'

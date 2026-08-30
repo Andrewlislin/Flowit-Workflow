@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { AgentAdapter, AgentDispatchRequest, AgentDispatchResult, AgentEvent, AgentSessionDescriptor } from '@coaseedge/flowit-core'
+import type { AgentAdapter, AgentDispatchRequest, AgentDispatchResult, AgentEvent, AgentSessionDescriptor } from '@coaseedgeltd/flowit-core'
 
 export const OPENCODE_ADAPTER_ID = 'opencode'
 type OpenCodeModule = typeof import('@opencode-ai/sdk/v2')

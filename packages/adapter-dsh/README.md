@@ -1,4 +1,4 @@
-# @coaseedge/flowit-adapter-dsh
+# @coaseedgeltd/flowit-adapter-dsh
 
 DeepSeek Harness reference adapter and plugin for Flowit Workflow.
 

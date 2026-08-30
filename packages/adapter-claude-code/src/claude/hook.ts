@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentEventKind } from '@coaseedge/flowit-core'
+import type { AgentEventKind } from '@coaseedgeltd/flowit-core'
 import { ClaudeEventJournal, ClaudeSessionCatalog, defaultClaudeStatePaths, type ClaudeStatePaths } from './state.js'
 
 export interface ClaudeHookInput { session_id: string; transcript_path?: string; cwd?: string; hook_event_name: string; session_title?: string; source?: string; last_assistant_message?: string; error?: string; error_details?: string; task_id?: string; task_subject?: string; task_description?: string; agent_id?: string; agent_type?: string; teammate_name?: string }

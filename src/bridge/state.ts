@@ -1,1 +1,1 @@
-export * from '@coaseedge/flowit-core/bridge/state'
+export * from '@coaseedgeltd/flowit-core/bridge/state'

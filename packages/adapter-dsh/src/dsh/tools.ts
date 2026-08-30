@@ -1,4 +1,4 @@
-import type { FlowitOrchestrationCore } from '@coaseedge/flowit-core'
+import type { FlowitOrchestrationCore } from '@coaseedgeltd/flowit-core'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { DSH_ADAPTER_ID } from '../adapters/dsh.js'

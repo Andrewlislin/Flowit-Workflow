@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { withFailClosedMutex } from '@coaseedge/flowit-core/internal/file-lock'
+import { withFailClosedMutex } from '@coaseedgeltd/flowit-core/internal/file-lock'
 
 const INITIALIZATION_GRACE_MS = 2_000
 

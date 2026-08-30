@@ -6,14 +6,14 @@ const out = '.tmp-packs'
 await rm(out, { recursive: true, force: true })
 await mkdir(out, { recursive: true })
 const packages = [
-  '@coaseedge/flowit-core',
-  '@coaseedge/flowit-adapter-claude-code',
-  '@coaseedge/flowit-adapter-opencode',
-  '@coaseedge/flowit-adapter-codex',
-  '@coaseedge/flowit-adapter-dsh',
-  '@coaseedge/flowit-adapter-file-bridge',
-  '@coaseedge/flowit-adapter-workbuddy',
-  '@coaseedge/flowit-adapter-doubao-office',
+  '@coaseedgeltd/flowit-core',
+  '@coaseedgeltd/flowit-adapter-claude-code',
+  '@coaseedgeltd/flowit-adapter-opencode',
+  '@coaseedgeltd/flowit-adapter-codex',
+  '@coaseedgeltd/flowit-adapter-dsh',
+  '@coaseedgeltd/flowit-adapter-file-bridge',
+  '@coaseedgeltd/flowit-adapter-workbuddy',
+  '@coaseedgeltd/flowit-adapter-doubao-office',
 ]
 for (const name of packages) {
   const result = spawnSync('pnpm', ['--filter', name, 'pack', '--pack-destination', out], { stdio: 'inherit' })

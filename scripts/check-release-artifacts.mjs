@@ -3,15 +3,15 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 
 const packageEntries = [
-  ['.', '@coaseedge/flowit-workflow'],
-  ['packages/core', '@coaseedge/flowit-core'],
-  ['packages/adapter-claude-code', '@coaseedge/flowit-adapter-claude-code'],
-  ['packages/adapter-codex', '@coaseedge/flowit-adapter-codex'],
-  ['packages/adapter-doubao-office', '@coaseedge/flowit-adapter-doubao-office'],
-  ['packages/adapter-dsh', '@coaseedge/flowit-adapter-dsh'],
-  ['packages/adapter-file-bridge', '@coaseedge/flowit-adapter-file-bridge'],
-  ['packages/adapter-opencode', '@coaseedge/flowit-adapter-opencode'],
-  ['packages/adapter-workbuddy', '@coaseedge/flowit-adapter-workbuddy'],
+  ['.', '@coaseedgeltd/flowit-workflow'],
+  ['packages/core', '@coaseedgeltd/flowit-core'],
+  ['packages/adapter-claude-code', '@coaseedgeltd/flowit-adapter-claude-code'],
+  ['packages/adapter-codex', '@coaseedgeltd/flowit-adapter-codex'],
+  ['packages/adapter-doubao-office', '@coaseedgeltd/flowit-adapter-doubao-office'],
+  ['packages/adapter-dsh', '@coaseedgeltd/flowit-adapter-dsh'],
+  ['packages/adapter-file-bridge', '@coaseedgeltd/flowit-adapter-file-bridge'],
+  ['packages/adapter-opencode', '@coaseedgeltd/flowit-adapter-opencode'],
+  ['packages/adapter-workbuddy', '@coaseedgeltd/flowit-adapter-workbuddy'],
 ]
 
 const rootManifest = JSON.parse(await readFile('package.json', 'utf8'))
@@ -59,13 +59,13 @@ for (const tarball of tarballs) {
   }
   for (const section of ['dependencies', 'optionalDependencies']) {
     for (const [name, specifier] of Object.entries(manifest[section] ?? {})) {
-      if (!name.startsWith('@coaseedge/flowit-')) continue
+      if (!name.startsWith('@coaseedgeltd/flowit-')) continue
       if (specifier !== version) {
         throw new Error(`${tarball} ${section}.${name} must pin ${version}; received ${specifier}`)
       }
     }
   }
-  if (manifest.name === '@coaseedge/flowit-workflow') rootTarball = tarball
+  if (manifest.name === '@coaseedgeltd/flowit-workflow') rootTarball = tarball
 }
 if (packedNames.size !== expectedNames.size) throw new Error('release tarball package set is incomplete')
 if (!rootTarball) throw new Error('root workflow tarball is missing')

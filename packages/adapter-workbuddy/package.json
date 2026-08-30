@@ -1,6 +1,6 @@
 {
-  "name": "@coaseedge/flowit-adapter-workbuddy",
-  "version": "0.5.0-beta.1",
+  "name": "@coaseedgeltd/flowit-adapter-workbuddy",
+  "version": "0.5.0-beta.2",
   "description": "WorkBuddy adapter for Flowit Workflow.",
   "license": "Apache-2.0",
   "type": "module",
@@ -13,8 +13,8 @@
     }
   },
   "dependencies": {
-    "@coaseedge/flowit-core": "workspace:*",
-    "@coaseedge/flowit-adapter-file-bridge": "workspace:*"
+    "@coaseedgeltd/flowit-core": "workspace:*",
+    "@coaseedgeltd/flowit-adapter-file-bridge": "workspace:*"
   },
   "files": [
     "dist",
