@@ -4,7 +4,10 @@ import {
   randomBytes,
   timingSafeEqual,
 } from 'node:crypto'
-import { canonicalJson } from './canonical.js'
+import {
+  canonicalJson,
+  confirmationCodeForProposalHash,
+} from './canonical.js'
 import {
   readOrCreateAuthoritySecret,
   routingAuthorityPaths,
@@ -15,9 +18,11 @@ export { routingAuthorityPaths } from './authority-state.js'
 import { assessTask, ADAPTIVE_ROUTING_POLICY_VERSION } from './policy.js'
 import type {
   RoutingAuthorityContext,
+  RoutingCallerContext,
   RoutingConfirmationChoice,
   RoutingExplicitIntent,
   RoutingMode,
+  RoutingWorkflowToolName,
   SignedTaskAssessment,
   TaskAssessmentRequest,
   TaskAssessmentResult,
@@ -26,6 +31,7 @@ import type {
 const DEFAULT_ASSESSMENT_TTL_MS = 10 * 60 * 1_000
 const DEFAULT_HOST_AUTHORITY_TTL_MS = 5 * 60 * 1_000
 const DEFAULT_CONFIRMATION_TTL_MS = 5 * 60 * 1_000
+const DEFAULT_CALLER_ATTESTATION_TTL_MS = 30_000
 
 interface HostAuthorityPayload {
   readonly kind: 'routing-authority'
@@ -57,11 +63,23 @@ interface ProposalConfirmationPayload {
   readonly nonce: string
 }
 
+interface CallerAttestationPayload {
+  readonly kind: 'routing-caller-attestation'
+  readonly version: 1
+  readonly toolName: RoutingWorkflowToolName
+  readonly inputDigest: string
+  readonly callerContext: RoutingCallerContext
+  readonly issuedAt: string
+  readonly expiresAt: string
+  readonly nonce: string
+}
+
 export interface RoutingAuthorityOptions {
   readonly mode: RoutingMode
   readonly secret?: string | Buffer
   readonly stateFile?: string
   readonly assessmentTtlMs?: number
+  readonly requireCallerAttestation?: boolean
   readonly now?: () => Date
 }
 
@@ -74,8 +92,23 @@ export interface IssueRoutingAuthorityInput {
   readonly ttlMs?: number
 }
 
+export interface IssueCallerAttestationInput {
+  readonly hostId: string
+  readonly hostSessionId: string
+  readonly toolUseId: string
+  readonly toolName: RoutingWorkflowToolName
+  readonly toolInput: Readonly<Record<string, unknown>>
+  readonly ttlMs?: number
+}
+
+export interface ConsumeCallerAttestationInput {
+  readonly toolName: RoutingWorkflowToolName
+  readonly toolInput: Readonly<Record<string, unknown>>
+}
+
 export interface RegisterProposalConfirmationInput {
   readonly proposalHash: string
+  readonly confirmationCode: string
   readonly expiresAt: string
   readonly authorityContext: RoutingAuthorityContext
 }
@@ -110,6 +143,7 @@ export class RoutingAuthorityService {
   private readonly key: Buffer
   private readonly state: RoutingAuthorityStateStore
   private readonly assessmentTtlMs: number
+  private readonly requireCallerAttestation: boolean
   private readonly now: () => Date
 
   constructor(options: RoutingAuthorityOptions) {
@@ -124,12 +158,16 @@ export class RoutingAuthorityService {
       1_000,
       'assessmentTtlMs',
     )
+    this.requireCallerAttestation = options.requireCallerAttestation ?? false
   }
 
-  assess(input: TaskAssessmentRequest): SignedTaskAssessment {
+  assess(
+    input: TaskAssessmentRequest,
+    callerContext?: RoutingCallerContext,
+  ): SignedTaskAssessment {
     const task = requiredString(input.task, 'task')
     const authority = input.authorityToken
-      ? this.verifyHostAuthority(input.authorityToken, task)
+      ? this.verifyHostAuthority(input.authorityToken, task, callerContext)
       : undefined
     const base = assessTask({
       task,
@@ -170,7 +208,10 @@ export class RoutingAuthorityService {
     return signed
   }
 
-  verifyAssessmentToken(token: string): SignedTaskAssessment {
+  verifyAssessmentToken(
+    token: string,
+    callerContext?: RoutingCallerContext,
+  ): SignedTaskAssessment {
     const payload = verifySignedPayload(this.key, token)
     if (
       !isRecord(payload) ||
@@ -185,7 +226,10 @@ export class RoutingAuthorityService {
     }
     assertNotExpired(payload.expiresAt, this.now(), 'adaptive routing assessment token')
     const assessment = payload.assessment as unknown as TaskAssessmentResult
-    if (assessment.authorityContext) validateAuthorityContext(assessment.authorityContext)
+    if (assessment.authorityContext) {
+      const expected = validateAuthorityContext(assessment.authorityContext)
+      this.assertCallerMatches(expected, callerContext, 'adaptive routing assessment')
+    }
     return {
       ...structuredClone(assessment),
       expiresAt: requiredTimestamp(payload.expiresAt, 'expiresAt'),
@@ -195,6 +239,95 @@ export class RoutingAuthorityService {
 
   issueHostAuthority(input: IssueRoutingAuthorityInput): string {
     return issueRoutingAuthorityToken(this.key, input, this.now())
+  }
+
+  issueCallerAttestation(input: IssueCallerAttestationInput): string {
+    const toolName = routingWorkflowToolName(input.toolName)
+    const toolUseId = requiredString(input.toolUseId, 'toolUseId')
+    const callerContext: RoutingCallerContext = {
+      hostId: requiredString(input.hostId, 'hostId'),
+      hostSessionId: requiredString(input.hostSessionId, 'hostSessionId'),
+      toolUseId,
+    }
+    const ttlMs = integerAtLeast(
+      input.ttlMs ?? DEFAULT_CALLER_ATTESTATION_TTL_MS,
+      1_000,
+      'ttlMs',
+    )
+    const now = this.now()
+    const nonce = randomBytes(16).toString('hex')
+    const expiresAt = new Date(now.getTime() + ttlMs).toISOString()
+    const inputDigest = toolInputDigest(input.toolInput)
+    const payload: CallerAttestationPayload = {
+      kind: 'routing-caller-attestation',
+      version: 1,
+      toolName,
+      inputDigest,
+      callerContext,
+      issuedAt: now.toISOString(),
+      expiresAt,
+      nonce,
+    }
+    this.state.putCallerAttestation({
+      nonce,
+      toolName,
+      inputDigest,
+      expiresAt,
+      callerContext,
+    })
+    return signPayload(this.key, payload)
+  }
+
+  consumeCallerAttestation(
+    token: string,
+    input: ConsumeCallerAttestationInput,
+  ): RoutingCallerContext {
+    const payload = verifySignedPayload(this.key, token)
+    if (
+      !isRecord(payload) ||
+      payload.kind !== 'routing-caller-attestation' ||
+      payload.version !== 1 ||
+      typeof payload.toolName !== 'string' ||
+      typeof payload.inputDigest !== 'string' ||
+      typeof payload.issuedAt !== 'string' ||
+      typeof payload.expiresAt !== 'string' ||
+      typeof payload.nonce !== 'string' ||
+      !isRecord(payload.callerContext)
+    ) {
+      throw new Error('invalid adaptive routing caller attestation')
+    }
+    const toolName = routingWorkflowToolName(payload.toolName)
+    const expectedToolName = routingWorkflowToolName(input.toolName)
+    if (toolName !== expectedToolName) {
+      throw new Error('adaptive routing caller attestation belongs to a different tool')
+    }
+    const inputDigest = requiredHash(payload.inputDigest, 'inputDigest')
+    if (inputDigest !== toolInputDigest(input.toolInput)) {
+      throw new Error('adaptive routing caller attestation does not match the exact tool input')
+    }
+    requiredTimestamp(payload.issuedAt, 'issuedAt')
+    assertNotExpired(
+      payload.expiresAt,
+      this.now(),
+      'adaptive routing caller attestation',
+    )
+    const nonce = requiredString(payload.nonce, 'nonce')
+    const callerContext = validateCallerContext(payload.callerContext)
+    const stored = this.state.takeCallerAttestation(nonce)
+    if (!stored) {
+      throw new Error('adaptive routing caller attestation is unknown, expired, or already used')
+    }
+    const expectedStored = {
+      nonce,
+      toolName,
+      inputDigest,
+      expiresAt: requiredTimestamp(payload.expiresAt, 'expiresAt'),
+      callerContext,
+    }
+    if (canonicalJson(stored) !== canonicalJson(expectedStored)) {
+      throw new Error('adaptive routing caller attestation state does not match its signature')
+    }
+    return callerContext
   }
 
   consumeRoutingChoice(
@@ -223,27 +356,39 @@ export class RoutingAuthorityService {
     }
   }
 
-  registerProposalConfirmation(input: RegisterProposalConfirmationInput): void {
+  registerProposalConfirmation(input: RegisterProposalConfirmationInput): string {
     const proposalHash = requiredHash(input.proposalHash, 'proposalHash')
+    const confirmationCode = requiredConfirmationCode(input.confirmationCode)
+    const expectedCode = confirmationCodeForProposalHash(proposalHash)
+    if (confirmationCode !== expectedCode) {
+      throw new Error('adaptive Workflow confirmation code does not match proposalHash')
+    }
     const expiresAt = requiredTimestamp(input.expiresAt, 'expiresAt')
     const context = validateAuthorityContext(input.authorityContext)
     assertNotExpired(expiresAt, this.now(), 'adaptive Workflow proposal')
     this.state.putProposalConfirmation({
       proposalHash,
+      confirmationCode,
       expiresAt,
       authorityContext: context,
       challengeNonce: randomBytes(16).toString('hex'),
     })
+    return confirmationCode
   }
 
   consumeProposalConfirmation(
     input: ConsumeAuthorityContextInput,
     choice: 'confirm' | 'cancel',
+    confirmationCode: string,
   ): ProposalConfirmationResult | undefined {
     const context = authorityContext(input)
-    const pending = this.state.takeProposalConfirmation(context)
+    const code = requiredConfirmationCode(confirmationCode)
+    const pending = this.state.takeProposalConfirmation(context, code)
     if (!pending) return undefined
     assertNotExpired(pending.expiresAt, this.now(), 'adaptive Workflow proposal')
+    if (pending.confirmationCode !== code) {
+      throw new Error('adaptive Workflow confirmation code changed after preparation')
+    }
     if (choice === 'cancel') {
       return { kind: 'cancelled', proposalHash: pending.proposalHash }
     }
@@ -270,6 +415,7 @@ export class RoutingAuthorityService {
   verifyProposalConfirmation(
     token: string,
     input: VerifyProposalConfirmationInput,
+    callerContext?: RoutingCallerContext,
   ): void {
     const payload = verifySignedPayload(this.key, token)
     if (
@@ -296,9 +442,18 @@ export class RoutingAuthorityService {
     if (canonicalJson(actualContext) !== canonicalJson(expectedContext)) {
       throw new Error('adaptive routing confirmation token belongs to a different Host turn')
     }
+    this.assertCallerMatches(
+      expectedContext,
+      callerContext,
+      'adaptive routing confirmation token',
+    )
   }
 
-  private verifyHostAuthority(token: string, task: string): HostAuthorityPayload {
+  private verifyHostAuthority(
+    token: string,
+    task: string,
+    callerContext?: RoutingCallerContext,
+  ): HostAuthorityPayload {
     const payload = verifySignedPayload(this.key, token)
     if (
       !isRecord(payload) ||
@@ -317,15 +472,41 @@ export class RoutingAuthorityService {
     if (payload.taskDigest !== taskDigest(task)) {
       throw new Error('trusted routing authority token does not match the current top-level task')
     }
+    const authorityContextValue = validateAuthorityContext(payload.authorityContext)
+    this.assertCallerMatches(
+      authorityContextValue,
+      callerContext,
+      'trusted routing authority token',
+    )
     return {
       kind: 'routing-authority',
       version: 1,
       taskDigest: payload.taskDigest,
       explicitIntent: payload.explicitIntent,
-      authorityContext: validateAuthorityContext(payload.authorityContext),
+      authorityContext: authorityContextValue,
       issuedAt: requiredTimestamp(payload.issuedAt, 'issuedAt'),
       expiresAt: requiredTimestamp(payload.expiresAt, 'expiresAt'),
       nonce: requiredString(payload.nonce, 'nonce'),
+    }
+  }
+
+  private assertCallerMatches(
+    expected: RoutingAuthorityContext,
+    callerContext: RoutingCallerContext | undefined,
+    name: string,
+  ): void {
+    if (!callerContext) {
+      if (this.requireCallerAttestation) {
+        throw new Error(`${name} requires a Host-issued current caller attestation`)
+      }
+      return
+    }
+    const caller = validateCallerContext(callerContext)
+    if (
+      caller.hostId !== expected.hostId ||
+      caller.hostSessionId !== expected.hostSessionId
+    ) {
+      throw new Error(`${name} belongs to a different Host Session`)
     }
   }
 }
@@ -363,7 +544,13 @@ export function createRoutingAuthorityFromEnvironment(
   const paths = routingAuthorityPaths(env)
   const explicitSecret = env.FLOWIT_WORKFLOW_ROUTING_AUTHORITY_SECRET?.trim()
   const secret = explicitSecret || readOrCreateAuthoritySecret(paths.secretFile)
-  return new RoutingAuthorityService({ mode, secret, stateFile: paths.stateFile })
+  return new RoutingAuthorityService({
+    mode,
+    secret,
+    stateFile: paths.stateFile,
+    requireCallerAttestation:
+      env.FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION?.trim() !== '0',
+  })
 }
 
 function issueProposalConfirmationToken(
@@ -419,6 +606,10 @@ function verifySignedPayload(key: Buffer, token: string): unknown {
   }
 }
 
+function toolInputDigest(value: Readonly<Record<string, unknown>>): string {
+  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')
+}
+
 function taskDigest(task: string): string {
   return createHash('sha256').update(task, 'utf8').digest('hex')
 }
@@ -437,6 +628,15 @@ function validateAuthorityContext(value: unknown): RoutingAuthorityContext {
     hostId: requiredString(value.hostId, 'authorityContext.hostId'),
     hostSessionId: requiredString(value.hostSessionId, 'authorityContext.hostSessionId'),
     turnNonce: requiredString(value.turnNonce, 'authorityContext.turnNonce'),
+  }
+}
+
+function validateCallerContext(value: unknown): RoutingCallerContext {
+  if (!isRecord(value)) throw new Error('routing caller context must be an object')
+  return {
+    hostId: requiredString(value.hostId, 'callerContext.hostId'),
+    hostSessionId: requiredString(value.hostSessionId, 'callerContext.hostSessionId'),
+    toolUseId: requiredString(value.toolUseId, 'callerContext.toolUseId'),
   }
 }
 
@@ -472,6 +672,24 @@ function isRoutingExplicitIntent(value: unknown): value is RoutingExplicitIntent
     value === 'force-flowit' ||
     value === 'force-direct' ||
     value === 'preview'
+}
+
+function routingWorkflowToolName(value: unknown): RoutingWorkflowToolName {
+  if (
+    value !== 'workflow_assess' &&
+    value !== 'workflow_prepare' &&
+    value !== 'workflow_commit'
+  ) {
+    throw new Error('adaptive routing caller attestation tool is invalid')
+  }
+  return value
+}
+
+function requiredConfirmationCode(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-F0-9]{12}$/.test(value)) {
+    throw new Error('confirmationCode must contain exactly 12 uppercase hexadecimal characters')
+  }
+  return value
 }
 
 function requiredHash(value: unknown, name: string): string {

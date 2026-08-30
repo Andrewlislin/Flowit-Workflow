@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto'
 import type { CreatePipelineInput, PipelineNode } from '../core/types.js'
-import { canonicalJson } from './canonical.js'
+import {
+  canonicalJson,
+  confirmationCodeForProposalHash,
+} from './canonical.js'
 import { ADAPTIVE_ROUTING_POLICY_VERSION } from './policy.js'
 import type {
   PrepareWorkflowInput,
   PreparedWorkflowProposal,
   ResolvedWorkflowBinding,
+  RoutingCallerContext,
   SignedTaskAssessment,
   TaskAssessmentResult,
   TaskKind,
@@ -13,6 +17,7 @@ import type {
 
 export interface WorkflowProposalRuntime {
   readonly now?: Date
+  readonly callerContext?: RoutingCallerContext
 }
 
 export interface BuildWorkflowProposalInput extends PrepareWorkflowInput {
@@ -69,9 +74,15 @@ export function buildWorkflowProposal(
       assessment.explicitIntent === 'preview',
     warnings,
   }
+  const proposalHash = digest(common)
+  const confirmationCode =
+    common.confirmationRequired && assessment.explicitIntent !== 'preview'
+      ? confirmationCodeForProposalHash(proposalHash)
+      : undefined
   const proposal: PreparedWorkflowProposal = {
     ...common,
-    proposalHash: digest(common),
+    proposalHash,
+    ...(confirmationCode ? { confirmationCode } : {}),
   }
   validateMvpProposal(proposal)
   return proposal
@@ -80,7 +91,11 @@ export function buildWorkflowProposal(
 export function proposalHashFor(
   proposal: Omit<PreparedWorkflowProposal, 'proposalHash'> | PreparedWorkflowProposal,
 ): string {
-  const { proposalHash: _proposalHash, ...common } = proposal as PreparedWorkflowProposal
+  const {
+    proposalHash: _proposalHash,
+    confirmationCode: _confirmationCode,
+    ...common
+  } = proposal as PreparedWorkflowProposal
   return digest(common)
 }
 
@@ -147,6 +162,21 @@ export function validateMvpProposal(proposal: PreparedWorkflowProposal): void {
   }
   if (proposal.proposalHash !== proposalHashFor(proposal)) {
     throw new Error('adaptive Workflow proposal hash does not match its executable content')
+  }
+  const codeRequired =
+    proposal.confirmationRequired &&
+    proposal.assessment.explicitIntent !== 'preview'
+  if (codeRequired) {
+    if (
+      proposal.confirmationCode !==
+      confirmationCodeForProposalHash(proposal.proposalHash)
+    ) {
+      throw new Error(
+        'adaptive Workflow confirmation code does not match the reviewed proposal',
+      )
+    }
+  } else if (proposal.confirmationCode !== undefined) {
+    throw new Error('adaptive Workflow proposal has an unexpected confirmation code')
   }
 }
 

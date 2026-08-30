@@ -19,6 +19,7 @@ import type {
   PrepareWorkflowInput,
   PreparedWorkflowProposal,
   ResolvedWorkflowBinding,
+  RoutingCallerContext,
   TaskAssessmentResult,
   WorkflowTargetBinding,
 } from './types.js'
@@ -34,6 +35,7 @@ export async function prepareWorkflow(
   signal?.throwIfAborted()
   const assessment = authority.verifyAssessmentToken(
     requiredString(input.assessmentToken, 'assessmentToken'),
+    runtime.callerContext,
   )
   if (assessment.decision === 'direct') {
     throw new Error('direct tasks do not produce an adaptive Workflow proposal')
@@ -55,8 +57,13 @@ export async function prepareWorkflow(
         'the selected Host did not provide a trusted confirmation channel for this adaptive Workflow proposal',
       )
     }
+    const confirmationCode = requiredString(
+      proposal.confirmationCode,
+      'confirmationCode',
+    )
     authority.registerProposalConfirmation({
       proposalHash: proposal.proposalHash,
+      confirmationCode,
       expiresAt: proposal.expiresAt,
       authorityContext,
     })
@@ -74,7 +81,12 @@ export async function commitPreparedWorkflow(
 ): Promise<CommitPreparedWorkflowResult> {
   await core.ready
   signal?.throwIfAborted()
-  const proposal = parsePreparedWorkflowProposal(value, authority)
+  const proposal = parsePreparedWorkflowProposal(
+    value,
+    authority,
+    new Date(),
+    options.callerContext,
+  )
   const expected = requiredHash(expectedHash, 'expectedHash')
   if (proposal.proposalHash !== expected) {
     throw new Error('adaptive Workflow proposal hash differs from the user-reviewed hash')
@@ -92,6 +104,7 @@ export async function commitPreparedWorkflow(
     authority.verifyProposalConfirmation(
       requiredString(options.confirmationToken, 'confirmationToken'),
       { proposalHash: proposal.proposalHash, authorityContext },
+      options.callerContext,
     )
   }
 
@@ -153,6 +166,7 @@ export function parsePreparedWorkflowProposal(
   value: unknown,
   authority: RoutingAuthorityService,
   now = new Date(),
+  callerContext?: RoutingCallerContext,
 ): PreparedWorkflowProposal {
   if (!isRecord(value)) throw new Error('proposal must be an object')
   if (value.kind !== 'adaptive-workflow-proposal' || value.version !== 2) {
@@ -161,7 +175,10 @@ export function parsePreparedWorkflowProposal(
   if (typeof value.assessmentToken !== 'string') {
     throw new Error('proposal.assessmentToken must be a string')
   }
-  const signedAssessment = authority.verifyAssessmentToken(value.assessmentToken)
+  const signedAssessment = authority.verifyAssessmentToken(
+    value.assessmentToken,
+    callerContext,
+  )
   const proposal = structuredClone(value) as unknown as PreparedWorkflowProposal
   if (!Number.isFinite(Date.parse(proposal.expiresAt)) || Date.parse(proposal.expiresAt) <= now.getTime()) {
     throw new Error('adaptive Workflow proposal expired; reassess and prepare the current task again')

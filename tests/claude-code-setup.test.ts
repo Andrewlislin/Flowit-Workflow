@@ -121,11 +121,28 @@ test('Claude Code user setup installs a self-contained skills-directory plugin f
     assert.equal(orchestration.env.FLOWIT_WORKFLOW_ADAPTER, 'claude-code')
     assert.equal(orchestration.env.FLOWIT_WORKFLOW_PLUGIN_ROOT, pluginRoot)
     assert.equal(orchestration.env.FLOWIT_WORKFLOW_CLAUDE_MUTATIONS, '1')
+    assert.equal(orchestration.env.FLOWIT_WORKFLOW_ROUTING_MODE, 'suggest')
+    assert.equal(
+      orchestration.env.FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION,
+      '1',
+    )
 
     const hooks = await json(path.join(pluginRoot, 'hooks', 'hooks.json'))
     assert.deepEqual(
       hooks.hooks.SessionStart[0].hooks[0].args,
       [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-hook'],
+    )
+    assert.deepEqual(
+      hooks.hooks.UserPromptSubmit[0].hooks[0].args,
+      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],
+    )
+    assert.match(
+      hooks.hooks.PreToolUse[0].matcher,
+      /workflow_assess.*workflow_prepare.*workflow_commit/,
+    )
+    assert.deepEqual(
+      hooks.hooks.PreToolUse[0].hooks[0].args,
+      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],
     )
     assert.equal(await readFile(path.join(pluginRoot, 'skills', 'run-bound', 'SKILL.md'), 'utf8'), '---\nname: run-bound\n---\nrun bound\n')
     assert.equal(await readFile(path.join(pluginRoot, 'skills', 'orchestrate', 'SKILL.md'), 'utf8'), '---\nname: orchestrate\n---\norchestrate\n')

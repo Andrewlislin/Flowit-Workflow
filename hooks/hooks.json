@@ -12,6 +12,19 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__orchestration__(workflow_assess|workflow_prepare|workflow_commit)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/dist/cli.js", "claude-routing-hook"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SessionStart": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],
     "Stop": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],
     "StopFailure": [{"hooks":[{"type":"command","command":"node","args":["${CLAUDE_PLUGIN_ROOT}/dist/cli.js","claude-hook"],"timeout":10}]}],

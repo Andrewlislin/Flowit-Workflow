@@ -2,11 +2,12 @@
 
 Adaptive routing lets an installed Agent decide whether a top-level task should remain in the current Agent, require a user choice, or become a bounded Flowit run-once Pipeline.
 
-The MVP is conservative in three places:
+The MVP is conservative in four places:
 
 1. routing mode and explicit user intent are not model-supplied;
 2. an `ask` decision and the final proposal confirmation require Host-issued proof;
-3. approved one-off work is stored as a durable run snapshot, not a permanent `PipelineDefinition`.
+3. every adaptive MCP call is bound to the actual Claude Session by `PreToolUse`;
+4. approved one-off work is stored as a durable run snapshot, not a permanent `PipelineDefinition`.
 
 ## Claude Code decision flow
 
@@ -16,6 +17,8 @@ Claude UserPromptSubmit
 exact top-level prompt + Claude Session id
         ↓
 Host-private HMAC authority token
+        ↓
+Claude PreToolUse attests the actual MCP caller Session
         ↓
 workflow_assess
         ↓
@@ -30,10 +33,13 @@ workflow_assess
 workflow_prepare
         ↓
 expiring proposal + exact binding fingerprint
++ confirmationCode derived from proposalHash
         ↓
-user replies “确认执行”
+user replies “确认执行 <confirmationCode>”
         ↓
-UserPromptSubmit signs proposalHash
+UserPromptSubmit resolves that exact proposal
+        ↓
+PreToolUse attests the actual commit caller Session
         ↓
 workflow_commit(confirmationToken)
         ↓
@@ -42,7 +48,7 @@ durable run snapshot + immediate runId
 
 `workflow_run_get` reads progress and node checkpoints without holding the commit call open.
 
-## Trusted authority
+## Trusted authority and actual caller identity
 
 `FLOWIT_WORKFLOW_ROUTING_MODE` is trusted process configuration and is never accepted as an MCP caller argument. Supported values are:
 
@@ -59,7 +65,19 @@ Claude's `UserPromptSubmit` Hook receives the exact submitted `prompt` and `sess
 
 Quoted blocks, JSON envelopes, repository text, webpages, tool output, and Flowit `run-bound` prompts cannot mint an override.
 
-The Hook and MCP process share a private key under:
+A separate Claude `PreToolUse` Hook runs for `workflow_assess`, `workflow_prepare`, and `workflow_commit`. It signs:
+
+- the actual Claude `session_id`;
+- the exact tool name;
+- the exact tool input;
+- the Claude tool-use id;
+- a short expiry and single-use nonce.
+
+The MCP server atomically consumes this caller attestation before using routing or confirmation authority. A token created in Session A therefore cannot be replayed from Session B, even when the task, proposal, and bearer token are copied together.
+
+## Runtime authority state
+
+The Hook and MCP process share retained runtime state under:
 
 ```text
 ~/.flowit-workflow/claude/routing-authority/
@@ -67,7 +85,7 @@ The Hook and MCP process share a private key under:
   pending.json
 ```
 
-The directory and key may be overridden with:
+The directory and files may be overridden with:
 
 ```text
 FLOWIT_WORKFLOW_ROUTING_AUTHORITY_DIR
@@ -75,22 +93,43 @@ FLOWIT_WORKFLOW_ROUTING_AUTHORITY_SECRET_FILE
 FLOWIT_WORKFLOW_ROUTING_AUTHORITY_STATE_FILE
 ```
 
-The secret is generated with exclusive creation and stored with owner-only permissions where the platform supports POSIX modes. The secret is not written into `.mcp.json`.
+The signing secret is retained runtime state, not an installer-owned plugin asset. It is not written into `.mcp.json` and is intentionally retained when the Claude plugin files are uninstalled.
 
-## User choices and proposal confirmation
+On first use, secret creation is serialized by a sidecar initialization lock and published by atomic rename after the complete secret has been written and synced. Concurrent Hook and MCP startup therefore cannot observe a newly created but empty `secret.key`. A malformed or truncated existing key fails closed.
+
+## User choices and exact proposal confirmation
 
 A model cannot authorize mutation by passing `confirmed=true`.
 
 When an assessment returns `ask`, Flowit stores a short-lived Host-private routing challenge keyed by Host and Claude Session. A subsequent exact choice (`1`, `2`, or `3`, or the corresponding text) is processed by `UserPromptSubmit`, which issues a new token bound to the original task.
 
-When `workflow_prepare` returns an executable proposal, it registers a second short-lived challenge containing:
+When `workflow_prepare` returns an executable proposal, it also returns:
 
-- `proposalHash`;
-- Host / Session context;
-- expiry;
-- random challenge nonce.
+```text
+proposalHash
+confirmationCode
+```
 
-The user must reply `确认执行` to mint a `confirmationToken`. `workflow_commit` verifies that the token is unexpired and matches both the exact `proposalHash` and the Host context carried by the signed assessment. `取消` clears the pending proposal without Workflow mutation.
+`confirmationCode` is the first 12 hexadecimal characters of the reviewed `proposalHash`, rendered in uppercase. Pending challenges are keyed by:
+
+```text
+Host + Claude Session + proposalHash
+```
+
+A new proposal does not overwrite an older unconfirmed proposal. The user must reply with an exact command such as:
+
+```text
+确认执行 7F31A2B4C9D0
+取消 7F31A2B4C9D0
+```
+
+The Hook resolves only the matching pending proposal. A plain `确认执行`, an unknown code, or a code for another proposal cannot mint a confirmation token.
+
+`workflow_commit` verifies that the confirmation token is unexpired and matches:
+
+- the exact `proposalHash`;
+- the Host context carried by the signed assessment;
+- the actual current Claude caller Session attested by `PreToolUse`.
 
 A preview-only proposal cannot be committed. The user must explicitly choose Flowit execution and obtain a new assessment.
 

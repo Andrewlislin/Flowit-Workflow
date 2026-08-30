@@ -6,8 +6,12 @@ import { executeControl } from './control.js'
 import type { AutomationTarget, CreatePipelineInput, CreateScheduleInput } from './core/types.js'
 import { createConfiguredRuntime, requireBuiltInAdapterId } from './runtime-factory.js'
 import {
+  commitPreparedWorkflow,
   createRoutingAuthorityFromEnvironment,
+  prepareWorkflow,
   type PrepareWorkflowInput,
+  type RoutingCallerContext,
+  type RoutingWorkflowToolName,
   type TaskAssessmentRequest,
   type WorkflowTargetBinding,
 } from './routing/index.js'
@@ -155,29 +159,31 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
         routingAuthority,
       )
     }
-    case 'workflow_assess':
-      return executeControl(
+    case 'workflow_assess': {
+      const callerContext = callerContextFor('workflow_assess', args)
+      return routingAuthority.assess(assessmentInput(args), callerContext)
+    }
+    case 'workflow_prepare': {
+      const callerContext = callerContextFor('workflow_prepare', args)
+      return prepareWorkflow(
         core,
-        { op: 'workflow.assess', input: assessmentInput(args) },
         routingAuthority,
+        prepareInput(args),
+        { callerContext },
       )
-    case 'workflow_prepare':
-      return executeControl(
-        core,
-        { op: 'workflow.prepare', input: prepareInput(args) },
-        routingAuthority,
-      )
+    }
     case 'workflow_commit': {
+      const callerContext = callerContextFor('workflow_commit', args)
       const confirmationToken = optional(args.confirmationToken)
-      return executeControl(
+      return commitPreparedWorkflow(
         core,
-        {
-          op: 'workflow.commit',
-          proposal: object(args.proposal, 'proposal'),
-          expectedHash: string(args.expectedHash, 'expectedHash'),
-          ...(confirmationToken ? { options: { confirmationToken } } : {}),
-        },
         routingAuthority,
+        object(args.proposal, 'proposal'),
+        string(args.expectedHash, 'expectedHash'),
+        {
+          callerContext,
+          ...(confirmationToken ? { confirmationToken } : {}),
+        },
       )
     }
     case 'workflow_run_get':
@@ -191,6 +197,19 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
     default:
       throw new Error(`unknown Flowit Workflow MCP tool ${name}`)
   }
+}
+
+function callerContextFor(
+  toolName: RoutingWorkflowToolName,
+  args: Record<string, unknown>,
+): RoutingCallerContext {
+  const callerToken = string(args.callerToken, 'callerToken')
+  const toolInput = structuredClone(args)
+  delete toolInput.callerToken
+  return routingAuthority.consumeCallerAttestation(
+    callerToken,
+    { toolName, toolInput },
+  )
 }
 
 function assessmentInput(args: Record<string, unknown>): TaskAssessmentRequest {
@@ -295,6 +314,11 @@ function tools(): unknown[] {
       skills: { type: 'array', items: { type: 'string' } },
     },
   }
+  const callerToken = {
+    type: 'string',
+    description:
+      'Opaque current-caller proof injected by the Claude PreToolUse Hook. Models must not create or copy this field.',
+  }
   return [
     {
       name: 'sessions_list',
@@ -347,12 +371,13 @@ function tools(): unknown[] {
     {
       name: 'workflow_assess',
       description:
-        'Read-only adaptive routing assessment. Routing mode comes only from trusted process configuration. Caller signals can increase but never lower inferred safety risk. Claude UserPromptSubmit can supply an exact-task Host authority token.',
+        'Read-only adaptive routing assessment. Routing mode comes only from trusted process configuration. A Claude PreToolUse Hook proves the actual calling Session and UserPromptSubmit may supply an exact-task authority token.',
       inputSchema: obj(
         {
           task: { type: 'string' },
           signals,
           authorityToken: { type: 'string' },
+          callerToken,
         },
         ['task'],
       ),
@@ -360,13 +385,14 @@ function tools(): unknown[] {
     {
       name: 'workflow_prepare',
       description:
-        'Read-only Workflow-state preparation of an expiring 2-6 node, single-Session run-once proposal from a signed assessment. It revalidates the exact Adapter/Session and registers a Host-private confirmation challenge when required.',
+        'Read-only Workflow-state preparation of an expiring 2-6 node, single-Session run-once proposal. The Claude PreToolUse Hook proves the actual caller Session.',
       inputSchema: obj(
         {
           assessmentToken: { type: 'string' },
           target,
           maxNodes: { type: 'integer', minimum: 2, maximum: 6 },
           pipelineName: { type: 'string' },
+          callerToken,
         },
         ['assessmentToken', 'target'],
       ),
@@ -374,12 +400,13 @@ function tools(): unknown[] {
     {
       name: 'workflow_commit',
       description:
-        'Revalidate an expiring signed proposal and exact binding. When confirmation is required, an opaque Host-issued token bound to the proposalHash is mandatory. Admission atomically persists a durable run-once snapshot and returns a run id.',
+        'Revalidate an expiring signed proposal and exact binding. The Host must prove the actual calling Session; when confirmation is required, the user must confirm the displayed proposal code.',
       inputSchema: obj(
         {
           proposal: { type: 'object' },
           expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
           confirmationToken: { type: 'string' },
+          callerToken,
         },
         ['proposal', 'expectedHash'],
       ),

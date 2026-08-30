@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import {
   chmodSync,
   closeSync,
@@ -12,8 +13,11 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
-import type { RoutingAuthorityContext } from './types.js'
+import type {
+  RoutingAuthorityContext,
+  RoutingCallerContext,
+  RoutingWorkflowToolName,
+} from './types.js'
 
 const STATE_VERSION = 1 as const
 const LOCK_TIMEOUT_MS = 1_000
@@ -27,15 +31,25 @@ export interface PendingRoutingChoice {
 
 export interface PendingProposalConfirmation {
   readonly proposalHash: string
+  readonly confirmationCode: string
   readonly expiresAt: string
   readonly authorityContext: RoutingAuthorityContext
   readonly challengeNonce: string
+}
+
+export interface PendingCallerAttestation {
+  readonly nonce: string
+  readonly toolName: RoutingWorkflowToolName
+  readonly inputDigest: string
+  readonly expiresAt: string
+  readonly callerContext: RoutingCallerContext
 }
 
 interface RoutingAuthorityState {
   version: 1
   routingChoices: Record<string, PendingRoutingChoice>
   proposalConfirmations: Record<string, PendingProposalConfirmation>
+  callerAttestations: Record<string, PendingCallerAttestation>
 }
 
 export interface RoutingAuthorityPaths {
@@ -54,7 +68,7 @@ export class RoutingAuthorityStateStore {
 
   putRoutingChoice(value: PendingRoutingChoice): void {
     this.mutate(state => {
-      state.routingChoices[stateKey(value.authorityContext)] = structuredClone(value)
+      state.routingChoices[sessionStateKey(value.authorityContext)] = structuredClone(value)
     })
   }
 
@@ -62,7 +76,7 @@ export class RoutingAuthorityStateStore {
     context: Pick<RoutingAuthorityContext, 'hostId' | 'hostSessionId'>,
   ): PendingRoutingChoice | undefined {
     return this.mutate(state => {
-      const key = stateKey(context)
+      const key = sessionStateKey(context)
       const value = state.routingChoices[key]
       delete state.routingChoices[key]
       return value ? structuredClone(value) : undefined
@@ -73,40 +87,79 @@ export class RoutingAuthorityStateStore {
     context: Pick<RoutingAuthorityContext, 'hostId' | 'hostSessionId'>,
   ): void {
     this.mutate(state => {
-      delete state.routingChoices[stateKey(context)]
+      delete state.routingChoices[sessionStateKey(context)]
     })
   }
 
   putProposalConfirmation(value: PendingProposalConfirmation): void {
     this.mutate(state => {
-      state.proposalConfirmations[stateKey(value.authorityContext)] = structuredClone(value)
+      state.proposalConfirmations[
+        proposalStateKey(value.authorityContext, value.proposalHash)
+      ] = structuredClone(value)
     })
   }
 
   takeProposalConfirmation(
     context: Pick<RoutingAuthorityContext, 'hostId' | 'hostSessionId'>,
+    confirmationCode: string,
   ): PendingProposalConfirmation | undefined {
     return this.mutate(state => {
-      const key = stateKey(context)
-      const value = state.proposalConfirmations[key]
-      delete state.proposalConfirmations[key]
-      return value ? structuredClone(value) : undefined
+      const prefix = `${sessionStateKey(context)}:`
+      const matches = Object.entries(state.proposalConfirmations).filter(
+        ([key, value]) =>
+          key.startsWith(prefix) &&
+          value.confirmationCode === confirmationCode,
+      )
+      if (matches.length > 1) {
+        throw new Error(
+          'adaptive Workflow confirmation code is ambiguous; prepare a fresh proposal',
+        )
+      }
+      const match = matches[0]
+      if (!match) return undefined
+      delete state.proposalConfirmations[match[0]]
+      return structuredClone(match[1])
     })
   }
 
   clearProposalConfirmation(
     context: Pick<RoutingAuthorityContext, 'hostId' | 'hostSessionId'>,
+    proposalHash?: string,
   ): void {
     this.mutate(state => {
-      delete state.proposalConfirmations[stateKey(context)]
+      if (proposalHash) {
+        delete state.proposalConfirmations[proposalStateKey(context, proposalHash)]
+        return
+      }
+      const prefix = `${sessionStateKey(context)}:`
+      for (const key of Object.keys(state.proposalConfirmations)) {
+        if (key.startsWith(prefix)) delete state.proposalConfirmations[key]
+      }
+    })
+  }
+
+  putCallerAttestation(value: PendingCallerAttestation): void {
+    this.mutate(state => {
+      state.callerAttestations[value.nonce] = structuredClone(value)
+    })
+  }
+
+  takeCallerAttestation(nonce: string): PendingCallerAttestation | undefined {
+    return this.mutate(state => {
+      const value = state.callerAttestations[nonce]
+      delete state.callerAttestations[nonce]
+      return value ? structuredClone(value) : undefined
     })
   }
 
   clearAll(context: Pick<RoutingAuthorityContext, 'hostId' | 'hostSessionId'>): void {
     this.mutate(state => {
-      const key = stateKey(context)
-      delete state.routingChoices[key]
-      delete state.proposalConfirmations[key]
+      const sessionKey = sessionStateKey(context)
+      delete state.routingChoices[sessionKey]
+      const prefix = `${sessionKey}:`
+      for (const key of Object.keys(state.proposalConfirmations)) {
+        if (key.startsWith(prefix)) delete state.proposalConfirmations[key]
+      }
     })
   }
 
@@ -143,22 +196,46 @@ export function routingAuthorityPaths(
 
 export function readOrCreateAuthoritySecret(file: string): string {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  const existing = readSecret(file)
+  if (existing !== undefined) return validateSecret(file, existing)
+
+  const release = acquireLock(`${file}.init.lock`)
   try {
-    const descriptor = openSync(file, 'wx', 0o600)
+    const afterLock = readSecret(file)
+    if (afterLock !== undefined) return validateSecret(file, afterLock)
+
+    const secret = randomBytes(48).toString('base64url')
+    const temporary = `${file}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`
+    const descriptor = openSync(temporary, 'wx', 0o600)
     try {
-      writeFileSync(descriptor, `${randomBytes(48).toString('base64url')}\n`, 'utf8')
+      writeFileSync(descriptor, `${secret}\n`, 'utf8')
       fsyncSync(descriptor)
     } finally {
       closeSync(descriptor)
     }
+    renameSync(temporary, file)
+    try { chmodSync(file, 0o600) } catch {}
+    fsyncDirectory(path.dirname(file))
+    return secret
+  } finally {
+    release()
+  }
+}
+
+function readSecret(file: string): string | undefined {
+  try {
+    return readFileSync(file, 'utf8').trim()
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+function validateSecret(file: string, secret: string): string {
+  if (Buffer.byteLength(secret, 'utf8') < 32) {
+    throw new Error(`routing authority secret ${file} must contain at least 32 bytes`)
   }
   try { chmodSync(file, 0o600) } catch {}
-  const secret = readFileSync(file, 'utf8').trim()
-  if (Buffer.byteLength(secret, 'utf8') < 32) {
-    throw new Error('routing authority secret must contain at least 32 bytes')
-  }
   return secret
 }
 
@@ -218,7 +295,15 @@ function readState(file: string): RoutingAuthorityState {
     ) {
       throw new Error('routing authority state has an unsupported shape')
     }
-    return value as unknown as RoutingAuthorityState
+    return {
+      version: STATE_VERSION,
+      routingChoices: value.routingChoices as Record<string, PendingRoutingChoice>,
+      proposalConfirmations:
+        value.proposalConfirmations as Record<string, PendingProposalConfirmation>,
+      callerAttestations: isRecord(value.callerAttestations)
+        ? value.callerAttestations as Record<string, PendingCallerAttestation>
+        : {},
+    }
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyState()
     throw error
@@ -236,27 +321,57 @@ function durableWrite(file: string, state: RoutingAuthorityState): void {
   }
   renameSync(temporary, file)
   try { chmodSync(file, 0o600) } catch {}
+  fsyncDirectory(path.dirname(file))
+}
+
+function fsyncDirectory(directory: string): void {
+  try {
+    const descriptor = openSync(directory, 'r')
+    try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
+  } catch {}
 }
 
 function prune(state: RoutingAuthorityState, now: Date): void {
   const nowMs = now.getTime()
   for (const [key, pending] of Object.entries(state.routingChoices)) {
-    if (!Number.isFinite(Date.parse(pending.expiresAt)) || Date.parse(pending.expiresAt) <= nowMs) {
+    if (!validFutureTimestamp(pending.expiresAt, nowMs)) {
       delete state.routingChoices[key]
     }
   }
   for (const [key, pending] of Object.entries(state.proposalConfirmations)) {
-    if (!Number.isFinite(Date.parse(pending.expiresAt)) || Date.parse(pending.expiresAt) <= nowMs) {
+    if (!validFutureTimestamp(pending.expiresAt, nowMs)) {
       delete state.proposalConfirmations[key]
+    }
+  }
+  for (const [key, pending] of Object.entries(state.callerAttestations)) {
+    if (!validFutureTimestamp(pending.expiresAt, nowMs)) {
+      delete state.callerAttestations[key]
     }
   }
 }
 
-function emptyState(): RoutingAuthorityState {
-  return { version: STATE_VERSION, routingChoices: {}, proposalConfirmations: {} }
+function validFutureTimestamp(value: string, nowMs: number): boolean {
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) && parsed > nowMs
 }
 
-function stateKey(
+function emptyState(): RoutingAuthorityState {
+  return {
+    version: STATE_VERSION,
+    routingChoices: {},
+    proposalConfirmations: {},
+    callerAttestations: {},
+  }
+}
+
+function proposalStateKey(
+  context: Pick<RoutingAuthorityContext, 'hostId' | 'hostSessionId'>,
+  proposalHash: string,
+): string {
+  return `${sessionStateKey(context)}:${proposalHash}`
+}
+
+function sessionStateKey(
   context: Pick<RoutingAuthorityContext, 'hostId' | 'hostSessionId'>,
 ): string {
   return `${encodeURIComponent(context.hostId)}:${encodeURIComponent(context.hostSessionId)}`

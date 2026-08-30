@@ -316,6 +316,7 @@ async function desiredClaudePluginFiles(
           FLOWIT_WORKFLOW_CLAUDE_ALLOW_LIVE_RESUME: '0',
           FLOWIT_WORKFLOW_ROUTING_MODE: 'suggest',
           FLOWIT_WORKFLOW_ROUTING_AUTHORITY_DIR: routingAuthorityDir,
+          FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION: '1',
         },
       },
     },
@@ -339,6 +340,11 @@ async function desiredClaudePluginFiles(
   const hooks = {
     hooks: {
       UserPromptSubmit: [routingHookEntry],
+      PreToolUse: [{
+        matcher:
+          'mcp__orchestration__(workflow_assess|workflow_prepare|workflow_commit)',
+        ...routingHookEntry,
+      }],
       SessionStart: [hookEntry],
       Stop: [hookEntry],
       StopFailure: [hookEntry],

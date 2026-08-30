@@ -9,7 +9,7 @@ import {
   type SetupRequestOptions,
 } from '../src/setup/index.js'
 
-test('Claude setup wires UserPromptSubmit authority minting to the same routing state used by MCP', async () => {
+test('Claude setup wires prompt authority and PreToolUse caller attestation to the same routing state used by MCP', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-claude-routing-setup-'))
   const home = path.join(root, 'home')
   const project = path.join(root, 'project')
@@ -65,10 +65,19 @@ test('Claude setup wires UserPromptSubmit authority minting to the same routing 
       hooks.hooks.UserPromptSubmit[0].hooks[0].args,
       [path.join(packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],
     )
+    assert.match(
+      hooks.hooks.PreToolUse[0].matcher,
+      /workflow_assess.*workflow_prepare.*workflow_commit/,
+    )
+    assert.deepEqual(
+      hooks.hooks.PreToolUse[0].hooks[0].args,
+      [path.join(packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],
+    )
 
     const mcp = JSON.parse(await readFile(path.join(pluginRoot, '.mcp.json'), 'utf8'))
     const env = mcp.mcpServers.orchestration.env
     assert.equal(env.FLOWIT_WORKFLOW_ROUTING_MODE, 'suggest')
+    assert.equal(env.FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION, '1')
     assert.equal(
       env.FLOWIT_WORKFLOW_ROUTING_AUTHORITY_DIR,
       path.join(home, '.flowit-workflow', 'claude', 'routing-authority'),

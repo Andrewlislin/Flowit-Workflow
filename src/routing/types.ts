@@ -12,6 +12,10 @@ export type RoutingExplicitIntent =
   | 'preview'
 export type RoutingDecisionKind = 'direct' | 'ask' | 'pipeline'
 export type RoutingConfirmationChoice = 'pipeline'
+export type RoutingWorkflowToolName =
+  | 'workflow_assess'
+  | 'workflow_prepare'
+  | 'workflow_commit'
 export type TaskKind = 'general' | 'research' | 'coding' | 'content'
 export type SideEffectRisk = 'none' | 'reversible' | 'irreversible'
 export type SignalLevel = 0 | 1 | 2 | 3
@@ -50,6 +54,12 @@ export interface RoutingAuthorityContext {
   readonly hostId: string
   readonly hostSessionId: string
   readonly turnNonce: string
+}
+
+export interface RoutingCallerContext {
+  readonly hostId: string
+  readonly hostSessionId: string
+  readonly toolUseId: string
 }
 
 export interface TaskAssessmentRequest {
@@ -135,11 +145,13 @@ export interface PreparedWorkflowProposal {
   readonly pipeline: CreatePipelineInput
   readonly proposalHash: string
   readonly confirmationRequired: boolean
+  readonly confirmationCode?: string
   readonly warnings: readonly string[]
 }
 
 export interface CommitPreparedWorkflowOptions {
   readonly confirmationToken?: string
+  readonly callerContext?: RoutingCallerContext
 }
 
 export interface CommitPreparedWorkflowResult {
