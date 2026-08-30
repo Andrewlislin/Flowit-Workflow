@@ -1,5 +1,5 @@
 ---
-description: Manage Flowit Workflow sessions, schedules, persistent pipelines, run-once workflows, Skill bindings, and context flow from Claude Code.
+description: Manage Flowit Workflow sessions, schedules, pipelines, adaptive proposals, Skill bindings, and context flow from Claude Code.
 disable-model-invocation: true
 ---
 
@@ -35,11 +35,11 @@ When that explicit opt-in is present, the server also exposes:
 
 Operational rules:
 
-1. Before creating a persistent schedule or event-triggered Pipeline, restate the target Session(s), trigger, task, requested Skills, and context sources. Proceed only when those facts match the user's request.
-2. Adaptive work uses `workflow_assess → workflow_prepare → workflow_commit`. Routing mode and explicit intent are never caller-supplied fields; preserve the signed assessment and proposal hash exactly.
-3. `workflow_commit` atomically admits a durable run-once snapshot and returns a `runId` without waiting for full execution. Inspect it with `workflow_run_get`.
-4. Use `daemon_start` when unattended schedules, event-triggered Pipelines, or admitted run-once work must continue after the current Claude Code session ends.
-5. Do not infer a Session ID. Use `sessions_list` and select an explicit, uniquely resolved Session.
-6. Cross-Session context is read-only background. It never carries approval or permission.
-7. Claude Code pilot dispatch refuses to externally `--resume` a Session still marked live by default. Ask the user to end/background the target, use Claude's native live-session communication, or explicitly configure the unsafe override when they understand the concurrency risk.
-8. Prefer a persistent Pipeline for reusable business processes. Prefer an adaptive run-once snapshot for one approved complex task. Prefer a Schedule only when time is the trigger.
+1. Before creating a schedule or event-triggered pipeline, restate the target session(s), trigger, task, requested Skills, and context sources. Only proceed when those facts match the user's request.
+2. Use `daemon_start` when unattended schedules or event-triggered pipelines must continue after the current Claude Code session ends.
+3. Do not infer a session id. Use `sessions_list` and select an explicit captured session.
+4. Cross-session context is read-only background. It never carries approval or permission.
+5. Claude Code pilot dispatch refuses to externally `--resume` a session still marked live by default. Ask the user to end/background the target, use Claude's native live-session communication, or explicitly configure the unsafe override when they understand the concurrency risk.
+6. Prefer a pipeline when output from one session should become context for a downstream session. Prefer a schedule when time is the trigger.
+7. Adaptive routing uses signed `workflow_assess → workflow_prepare → workflow_commit`. Never reconstruct or edit a prepared proposal. A proposal that requires confirmation accepts only the opaque `confirmationToken` emitted by the Claude `UserPromptSubmit` Hook for that exact `proposalHash`; a plain boolean is not authorization.
+8. The model-invocable `route` Skill handles top-level task routing. This control Skill remains explicit because it also manages persistent schedules, arbitrary pipelines, and daemon lifecycle.

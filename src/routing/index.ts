@@ -1,6 +1,7 @@
 export * from './types.js'
 export * from './canonical.js'
 export * from './policy.js'
+export * from './intent.js'
 export * from './authority.js'
 export * from './planner.js'
 export * from './service.js'

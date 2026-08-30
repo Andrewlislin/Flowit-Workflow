@@ -42,7 +42,9 @@ export async function executeControl(
     case 'state':
       return core.store.snapshot()
     case 'sessions.list': {
-      const adapters = request.adapterId ? [core.adapters.require(request.adapterId)] : core.adapters.list()
+      const adapters = request.adapterId
+        ? [core.adapters.require(request.adapterId)]
+        : core.adapters.list()
       return (await Promise.all(adapters.map(async adapter => {
         await core.adapters.start(adapter)
         return adapter.listSessions(request.query ?? '')

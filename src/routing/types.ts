@@ -11,6 +11,7 @@ export type RoutingExplicitIntent =
   | 'force-direct'
   | 'preview'
 export type RoutingDecisionKind = 'direct' | 'ask' | 'pipeline'
+export type RoutingConfirmationChoice = 'pipeline'
 export type TaskKind = 'general' | 'research' | 'coding' | 'content'
 export type SideEffectRisk = 'none' | 'reversible' | 'irreversible'
 export type SignalLevel = 0 | 1 | 2 | 3
@@ -43,6 +44,12 @@ export interface ResolvedTaskAssessmentSignals {
   readonly crossAdapterNeed: boolean
   readonly sideEffectRisk: SideEffectRisk
   readonly ambiguity: SignalLevel
+}
+
+export interface RoutingAuthorityContext {
+  readonly hostId: string
+  readonly hostSessionId: string
+  readonly turnNonce: string
 }
 
 export interface TaskAssessmentRequest {
@@ -78,6 +85,7 @@ export interface TaskAssessmentResult {
   readonly mode: RoutingMode
   readonly explicitIntent: RoutingExplicitIntent
   readonly authorityTrusted: boolean
+  readonly authorityContext?: RoutingAuthorityContext
   readonly decision: RoutingDecisionKind
   readonly score: number
   readonly confidence: number
@@ -131,7 +139,7 @@ export interface PreparedWorkflowProposal {
 }
 
 export interface CommitPreparedWorkflowOptions {
-  readonly confirmed?: boolean
+  readonly confirmationToken?: string
 }
 
 export interface CommitPreparedWorkflowResult {

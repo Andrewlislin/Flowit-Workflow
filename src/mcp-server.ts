@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { executeControl } from './control.js'
-import { createConfiguredRuntime, requireBuiltInAdapterId } from './runtime-factory.js'
 import type { AutomationTarget, CreatePipelineInput, CreateScheduleInput } from './core/types.js'
+import { createConfiguredRuntime, requireBuiltInAdapterId } from './runtime-factory.js'
 import {
   createRoutingAuthorityFromEnvironment,
   type PrepareWorkflowInput,
@@ -29,6 +29,7 @@ const adapterId = requireBuiltInAdapterId(
 const core = createConfiguredRuntime({ activeWorkers: false, defaultAdapterId: adapterId })
 const routingAuthority = createRoutingAuthorityFromEnvironment()
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
+
 rl.on('line', line => {
   void handle(line).catch(error =>
     process.stderr.write(
@@ -166,17 +167,19 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
         { op: 'workflow.prepare', input: prepareInput(args) },
         routingAuthority,
       )
-    case 'workflow_commit':
+    case 'workflow_commit': {
+      const confirmationToken = optional(args.confirmationToken)
       return executeControl(
         core,
         {
           op: 'workflow.commit',
           proposal: object(args.proposal, 'proposal'),
           expectedHash: string(args.expectedHash, 'expectedHash'),
-          options: { confirmed: boolean(args.confirmed, 'confirmed') },
+          ...(confirmationToken ? { options: { confirmationToken } } : {}),
         },
         routingAuthority,
       )
+    }
     case 'workflow_run_get':
       return executeControl(
         core,
@@ -344,7 +347,7 @@ function tools(): unknown[] {
     {
       name: 'workflow_assess',
       description:
-        'Read-only adaptive routing assessment. Routing mode comes only from trusted process configuration. Caller signals can increase but never lower inferred safety risk. A host-issued authority token may attest the exact top-level task.',
+        'Read-only adaptive routing assessment. Routing mode comes only from trusted process configuration. Caller signals can increase but never lower inferred safety risk. Claude UserPromptSubmit can supply an exact-task Host authority token.',
       inputSchema: obj(
         {
           task: { type: 'string' },
@@ -357,7 +360,7 @@ function tools(): unknown[] {
     {
       name: 'workflow_prepare',
       description:
-        'Read-only preparation of an expiring 2-6 node, single-Session run-once proposal from a signed assessment token. Resolves and fingerprints the exact Adapter and Session before returning.',
+        'Read-only Workflow-state preparation of an expiring 2-6 node, single-Session run-once proposal from a signed assessment. It revalidates the exact Adapter/Session and registers a Host-private confirmation challenge when required.',
       inputSchema: obj(
         {
           assessmentToken: { type: 'string' },
@@ -371,14 +374,14 @@ function tools(): unknown[] {
     {
       name: 'workflow_commit',
       description:
-        'Revalidate an expiring signed proposal and exact binding, atomically persist a durable run-once snapshot, and return immediately with a run id. Does not create a permanent PipelineDefinition.',
+        'Revalidate an expiring signed proposal and exact binding. When confirmation is required, an opaque Host-issued token bound to the proposalHash is mandatory. Admission atomically persists a durable run-once snapshot and returns a run id.',
       inputSchema: obj(
         {
           proposal: { type: 'object' },
-          expectedHash: { type: 'string' },
-          confirmed: { type: 'boolean' },
+          expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+          confirmationToken: { type: 'string' },
         },
-        ['proposal', 'expectedHash', 'confirmed'],
+        ['proposal', 'expectedHash'],
       ),
     },
     {
@@ -408,7 +411,9 @@ function isMutation(name: string): boolean {
 }
 
 function string(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} must be a non-empty string`)
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${name} must be a non-empty string`)
+  }
   return value.trim()
 }
 
@@ -420,11 +425,6 @@ function optionalInteger(value: unknown, name: string): number | undefined {
   if (value === undefined) return undefined
   if (!Number.isSafeInteger(value)) throw new Error(`${name} must be an integer`)
   return Number(value)
-}
-
-function boolean(value: unknown, name: string): boolean {
-  if (typeof value !== 'boolean') throw new Error(`${name} must be a boolean`)
-  return value
 }
 
 function stringArray(value: unknown, name: string): string[] {

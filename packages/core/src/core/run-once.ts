@@ -12,7 +12,7 @@ import type {
 import { AgentAdapterRegistry } from './adapter.js'
 import { ContextGraph } from './context-graph.js'
 import { OrchestrationDispatcher } from './dispatcher.js'
-import { startLeaseHeartbeat } from './lease.js'
+import { startRunLeaseHeartbeat } from './lease.js'
 import { JsonWorkflowStore } from './store.js'
 
 const DEFAULT_RECONCILE_MS = 1_000
@@ -159,6 +159,8 @@ export class RunOncePipelineRuntime {
       latest.set(identity(run.definitionId, run.triggerKey), run)
     }
     for (const run of latest.values()) {
+      const snapshot = run.pipelineSnapshot
+      if (!snapshot) continue
       if (run.status === 'completed' || run.status === 'dead_letter') continue
       if (run.status === 'running') {
         const boundary = Date.parse(run.leaseExpiresAt ?? '')
@@ -171,7 +173,7 @@ export class RunOncePipelineRuntime {
       const outcome = await this.claim({
         definitionId: run.definitionId,
         triggerKey: run.triggerKey,
-        snapshot: run.pipelineSnapshot,
+        snapshot,
       })
       if (outcome.kind === 'claimed') this.enqueue(outcome.run)
     }
@@ -188,22 +190,20 @@ export class RunOncePipelineRuntime {
     void work.catch(() => undefined)
   }
 
-  private async claim(input: Required<Pick<AdmitRunOncePipelineInput, 'definitionId' | 'triggerKey' | 'snapshot'>> & { now?: Date }): Promise<ClaimOutcome> {
+  private async claim(
+    input: Required<Pick<AdmitRunOncePipelineInput, 'definitionId' | 'triggerKey' | 'snapshot'>> & {
+      now?: Date
+    },
+  ): Promise<ClaimOutcome> {
     const now = input.now ?? new Date()
-    const outcome = await this.store.transact(state =>
-      claimInState(state, input, now, this.options),
-    )
-    if (outcome.kind === 'claimed') {
-      await this.store.putRun(outcome.run)
-    }
-    return outcome
+    return this.store.transact(state => claimInState(state, input, now, this.options))
   }
 
   private async execute(initial: AutomationRunRecord): Promise<void> {
     if (!initial.pipelineSnapshot || this.disposed) return
     let running = initial
     const snapshot = initial.pipelineSnapshot
-    const heartbeat = startLeaseHeartbeat(
+    const heartbeat = startRunLeaseHeartbeat(
       this.store,
       running.id,
       this.options.workerId,
@@ -299,11 +299,21 @@ function claimInState(
   const latest = matches.at(-1)
   if (receipt) {
     return receipt.status === 'completed'
-      ? { kind: 'completed', ...(latest ? { run: structuredClone(latest) } : {}), receipt: structuredClone(receipt) }
-      : { kind: 'dead-letter', ...(latest ? { run: structuredClone(latest) } : {}), receipt: structuredClone(receipt) }
+      ? {
+          kind: 'completed',
+          ...(latest ? { run: structuredClone(latest) } : {}),
+          receipt: structuredClone(receipt),
+        }
+      : {
+          kind: 'dead-letter',
+          ...(latest ? { run: structuredClone(latest) } : {}),
+          receipt: structuredClone(receipt),
+        }
   }
   if (latest?.status === 'completed') return { kind: 'completed', run: structuredClone(latest) }
-  if (latest?.status === 'dead_letter') return { kind: 'dead-letter', run: structuredClone(latest) }
+  if (latest?.status === 'dead_letter') {
+    return { kind: 'dead-letter', run: structuredClone(latest) }
+  }
   if (latest?.pipelineSnapshot && !isDeepStrictEqual(latest.pipelineSnapshot, input.snapshot)) {
     throw new Error('run-once Pipeline identity is already bound to a different executable snapshot')
   }
@@ -421,7 +431,11 @@ function addTerminalReceipt(
   })
 }
 
-function normalizeInput(input: AdmitRunOncePipelineInput): Required<Pick<AdmitRunOncePipelineInput, 'definitionId' | 'triggerKey' | 'snapshot'>> & { now?: Date } {
+function normalizeInput(
+  input: AdmitRunOncePipelineInput,
+): Required<Pick<AdmitRunOncePipelineInput, 'definitionId' | 'triggerKey' | 'snapshot'>> & {
+  now?: Date
+} {
   const definitionId = requiredString(input.definitionId, 'definitionId')
   const triggerKey = requiredString(input.triggerKey, 'triggerKey')
   if (triggerKey.startsWith('manual:')) {
@@ -444,7 +458,12 @@ function validateSnapshot(value: RunOncePipelineSnapshot): RunOncePipelineSnapsh
   }
   if (!Array.isArray(value.edges)) throw new Error('run-once Pipeline snapshot edges must be an array')
   topologicalOrder(value.nodes, value.edges)
-  return { version: 1, name, nodes: structuredClone(value.nodes), edges: structuredClone(value.edges) }
+  return {
+    version: 1,
+    name,
+    nodes: structuredClone(value.nodes),
+    edges: structuredClone(value.edges),
+  }
 }
 
 function admission(
@@ -494,7 +513,9 @@ function identity(definitionId: string, triggerKey: string): string {
 }
 
 function requiredString(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} must be a non-empty string`)
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${name} must be a non-empty string`)
+  }
   return value.trim()
 }
 

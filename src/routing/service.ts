@@ -35,8 +35,33 @@ export async function prepareWorkflow(
   const assessment = authority.verifyAssessmentToken(
     requiredString(input.assessmentToken, 'assessmentToken'),
   )
+  if (assessment.decision === 'direct') {
+    throw new Error('direct tasks do not produce an adaptive Workflow proposal')
+  }
+  if (assessment.decision === 'ask') {
+    throw new Error(
+      'adaptive routing requires a trusted user choice before proposal preparation; reassess with the Host-issued choice authority token',
+    )
+  }
   const binding = await resolveWorkflowBinding(core, input.target, signal)
-  return buildWorkflowProposal({ ...input, assessment, binding }, runtime)
+  const proposal = buildWorkflowProposal({ ...input, assessment, binding }, runtime)
+  if (
+    proposal.confirmationRequired &&
+    proposal.assessment.explicitIntent !== 'preview'
+  ) {
+    const authorityContext = proposal.assessment.authorityContext
+    if (!authorityContext) {
+      throw new Error(
+        'the selected Host did not provide a trusted confirmation channel for this adaptive Workflow proposal',
+      )
+    }
+    authority.registerProposalConfirmation({
+      proposalHash: proposal.proposalHash,
+      expiresAt: proposal.expiresAt,
+      authorityContext,
+    })
+  }
+  return proposal
 }
 
 export async function commitPreparedWorkflow(
@@ -50,12 +75,24 @@ export async function commitPreparedWorkflow(
   await core.ready
   signal?.throwIfAborted()
   const proposal = parsePreparedWorkflowProposal(value, authority)
-  const expected = requiredString(expectedHash, 'expectedHash')
+  const expected = requiredHash(expectedHash, 'expectedHash')
   if (proposal.proposalHash !== expected) {
     throw new Error('adaptive Workflow proposal hash differs from the user-reviewed hash')
   }
-  if (proposal.confirmationRequired && options.confirmed !== true) {
-    throw new Error('adaptive Workflow proposal requires explicit confirmation before durable admission')
+  if (proposal.assessment.explicitIntent === 'preview') {
+    throw new Error(
+      'a preview-only proposal cannot be committed; the user must explicitly choose Flowit execution and reassess',
+    )
+  }
+  if (proposal.confirmationRequired) {
+    const authorityContext = proposal.assessment.authorityContext
+    if (!authorityContext) {
+      throw new Error('adaptive Workflow proposal has no trusted Host confirmation context')
+    }
+    authority.verifyProposalConfirmation(
+      requiredString(options.confirmationToken, 'confirmationToken'),
+      { proposalHash: proposal.proposalHash, authorityContext },
+    )
   }
 
   const currentBinding = await resolveWorkflowBinding(
@@ -126,7 +163,7 @@ export function parsePreparedWorkflowProposal(
   }
   const signedAssessment = authority.verifyAssessmentToken(value.assessmentToken)
   const proposal = structuredClone(value) as unknown as PreparedWorkflowProposal
-  if (Date.parse(proposal.expiresAt) <= now.getTime()) {
+  if (!Number.isFinite(Date.parse(proposal.expiresAt)) || Date.parse(proposal.expiresAt) <= now.getTime()) {
     throw new Error('adaptive Workflow proposal expired; reassess and prepare the current task again')
   }
   if (proposal.expiresAt !== signedAssessment.expiresAt) {
@@ -228,7 +265,7 @@ function validateBindingShape(value: unknown): asserts value is ResolvedWorkflow
   if (!isRecord(value)) throw new Error('proposal.binding must be an object')
   requiredString(value.adapterId, 'proposal.binding.adapterId')
   requiredString(value.sessionId, 'proposal.binding.sessionId')
-  requiredString(value.fingerprint, 'proposal.binding.fingerprint')
+  requiredHash(value.fingerprint, 'proposal.binding.fingerprint')
   if (!isRecord(value.session)) throw new Error('proposal.binding.session must be an object')
   if (!isRecord(value.capabilities)) throw new Error('proposal.binding.capabilities must be an object')
   if (!Array.isArray(value.skills) || value.skills.some(skill => typeof skill !== 'string')) {
@@ -270,8 +307,17 @@ function digest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex')
 }
 
+function requiredHash(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !/^[a-f0-9]{64}$/.test(value)) {
+    throw new Error(`${name} must be a lowercase SHA-256 hex digest`)
+  }
+  return value
+}
+
 function requiredString(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} must be a non-empty string`)
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${name} must be a non-empty string`)
+  }
   return value.trim()
 }
 
