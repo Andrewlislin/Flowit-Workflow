@@ -5,6 +5,8 @@ import path from 'node:path'
 import test from 'node:test'
 import { CodexAgentAdapter } from '../../src/adapters/codex.js'
 
+const FAKE_SERVER_REQUEST_TIMEOUT_MS = 5_000
+
 async function fakeCodex(
   root: string,
   mode: 'complete' | 'failed' | 'interrupted' | 'approval' | 'exit' | 'timeout',
@@ -52,7 +54,7 @@ test('completion delivered in same stdout batch is buffered instead of lost', as
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-complete-'))
   const adapter = new CodexAgentAdapter({
     executable: await fakeCodex(root, 'complete'),
-    requestTimeoutMs: 500,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 500,
   })
   try {
@@ -69,7 +71,7 @@ test('failed and interrupted turns reject instead of being recorded successful',
     const root = await mkdtemp(path.join(os.tmpdir(), `flowit-codex-${mode}-`))
     const adapter = new CodexAgentAdapter({
       executable: await fakeCodex(root, mode),
-      requestTimeoutMs: 500,
+      requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
       turnTimeoutMs: 500,
     })
     try {
@@ -85,7 +87,7 @@ test('string-id unattended approval requests are answered fail-closed', async ()
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-approval-'))
   const adapter = new CodexAgentAdapter({
     executable: await fakeCodex(root, 'approval'),
-    requestTimeoutMs: 500,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 500,
   })
   try {
@@ -101,7 +103,7 @@ test('child exit rejects waiters and turn timeout sends turn/interrupt', async (
   const exitRoot = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-exit-'))
   const exitAdapter = new CodexAgentAdapter({
     executable: await fakeCodex(exitRoot, 'exit'),
-    requestTimeoutMs: 500,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 1000,
   })
   try {
@@ -115,7 +117,7 @@ test('child exit rejects waiters and turn timeout sends turn/interrupt', async (
   const marker = path.join(timeoutRoot, 'interrupt.txt')
   const timeoutAdapter = new CodexAgentAdapter({
     executable: await fakeCodex(timeoutRoot, 'timeout', marker),
-    requestTimeoutMs: 500,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 50,
   })
   try {
@@ -170,7 +172,7 @@ test('Codex adapter restarts app-server after a spontaneous child exit', async (
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-restart-'))
   const adapter = new CodexAgentAdapter({
     executable: await restartableCodex(root),
-    requestTimeoutMs: 500,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 1_000,
   })
   try {
