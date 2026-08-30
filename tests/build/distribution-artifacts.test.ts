@@ -5,11 +5,15 @@ import test from 'node:test'
 
 type PackageManifest = {
   name?: string
+  version?: string
   private?: boolean
   main?: unknown
   types?: unknown
   bin?: unknown
   exports?: unknown
+  dependencies?: Record<string, string>
+  optionalDependencies?: Record<string, string>
+  peerDependencies?: Record<string, string>
 }
 
 async function discoverPackageDirectories(): Promise<string[]> {
@@ -133,4 +137,41 @@ test('build emits every declared public package entrypoint', async () => {
       await assertTargetExists(directory, target, packageName)
     }
   }
+})
+
+test('distribution manifests use the beta.2 organization package identity', async () => {
+  const packageDirectories = await discoverPackageDirectories()
+  const expectedNames = new Set([
+    '@coaseedgeltd/flowit-workflow',
+    '@coaseedgeltd/flowit-core',
+    '@coaseedgeltd/flowit-adapter-claude-code',
+    '@coaseedgeltd/flowit-adapter-codex',
+    '@coaseedgeltd/flowit-adapter-doubao-office',
+    '@coaseedgeltd/flowit-adapter-dsh',
+    '@coaseedgeltd/flowit-adapter-file-bridge',
+    '@coaseedgeltd/flowit-adapter-opencode',
+    '@coaseedgeltd/flowit-adapter-workbuddy',
+  ])
+  const actualNames = new Set<string>()
+
+  for (const directory of packageDirectories) {
+    const manifest = JSON.parse(
+      await readFile(path.join(directory, 'package.json'), 'utf8'),
+    ) as PackageManifest
+    assert.equal(manifest.version, '0.5.0-beta.2', `${manifest.name} version drifted`)
+    assert.ok(manifest.name && expectedNames.has(manifest.name), `${directory} has ${manifest.name}`)
+    actualNames.add(manifest.name)
+
+    for (const dependencies of [
+      manifest.dependencies,
+      manifest.optionalDependencies,
+      manifest.peerDependencies,
+    ]) {
+      for (const name of Object.keys(dependencies ?? {})) {
+        assert.doesNotMatch(name, /^@coaseedge\//, `${manifest.name} retains ${name}`)
+      }
+    }
+  }
+
+  assert.deepEqual(actualNames, expectedNames)
 })

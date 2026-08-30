@@ -30,3 +30,35 @@ test('dependency installation has no automatic lifecycle build', async () => {
     assert.equal(value[command], undefined)
   }
 })
+
+test('release validation commands preserve the reviewed pack order', async () => {
+  const value = await scripts()
+  assert.equal(value['check:pack'], 'node scripts/check-package-packs.mjs')
+  assert.equal(value['check:release'], 'node scripts/check-release-artifacts.mjs')
+  assert.ok(value.check.indexOf('npm run check:pack') < value.check.indexOf('npm run check:release'))
+})
+
+test('release workflow publishes the exact organization package set', async () => {
+  const workflow = await readFile('.github/workflows/release.yml', 'utf8')
+  const expectedPackages = [
+    '@coaseedgeltd/flowit-core',
+    '@coaseedgeltd/flowit-adapter-file-bridge',
+    '@coaseedgeltd/flowit-adapter-claude-code',
+    '@coaseedgeltd/flowit-adapter-codex',
+    '@coaseedgeltd/flowit-adapter-opencode',
+    '@coaseedgeltd/flowit-adapter-dsh',
+    '@coaseedgeltd/flowit-adapter-workbuddy',
+    '@coaseedgeltd/flowit-adapter-doubao-office',
+    '@coaseedgeltd/flowit-workflow',
+  ]
+  const publishCommands = [...workflow.matchAll(/publish_one '([^']+)' "([^"]+)"/g)]
+
+  assert.deepEqual(publishCommands.map(match => match[1]), expectedPackages)
+  assert.deepEqual(
+    publishCommands.map(match => match[2]),
+    expectedPackages.map(name =>
+      `.tmp-packs/${name.slice(1).replace('/', '-')}-\${VERSION}.tgz`,
+    ),
+  )
+  assert.doesNotMatch(workflow, /@coaseedge\//)
+})
