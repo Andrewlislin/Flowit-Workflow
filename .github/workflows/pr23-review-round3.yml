@@ -3,7 +3,7 @@ name: PR23 Review Round 3
 on:
   push:
     branches:
-      - pr23-review-round3-ready
+      - pr23-review-round3-staging
 
 permissions:
   contents: write
