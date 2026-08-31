@@ -26,6 +26,24 @@ jobs:
         shell: bash
         run: |
           python .github/pr23-round4/fix.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/contracts/codex-execution-preflight.test.ts')
+          text = path.read_text()
+          text = text.replace(
+              "const send = value => process.stdout.write(JSON.stringify(value) + '\\n');",
+              "const send = value => process.stdout.write(JSON.stringify(value) + String.fromCharCode(10));",
+          )
+          text = text.replace(
+              "fs.appendFileSync(marker, JSON.stringify(msg.params) + '\\n');",
+              "fs.appendFileSync(marker, JSON.stringify(msg.params) + String.fromCharCode(10));",
+          )
+          text = text.replace(
+              "fs.appendFileSync(marker, JSON.stringify(msg.params || {}) + '\\n');",
+              "fs.appendFileSync(marker, JSON.stringify(msg.params || {}) + String.fromCharCode(10));",
+          )
+          path.write_text(text)
+          PY
           rm -rf .github/pr23-round4 .github/workflows/pr23-review-round4.yml
           git diff --check
       - name: Install dependencies
