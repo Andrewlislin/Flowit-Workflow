@@ -10,9 +10,35 @@ interface VersionComparator {
   readonly version: SemanticVersion
 }
 
+const SEMVER_NUMBER_SOURCE = '(?:0|[1-9]\\d*)'
+const SEMVER_IDENTIFIER_LIST_SOURCE = '[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*'
+const FULL_VERSION_SOURCE = `${SEMVER_NUMBER_SOURCE}\\.${SEMVER_NUMBER_SOURCE}\\.${SEMVER_NUMBER_SOURCE}(?:-${SEMVER_IDENTIFIER_LIST_SOURCE})?(?:\\+${SEMVER_IDENTIFIER_LIST_SOURCE})?`
+const PARTIAL_COMPARATOR_VERSION_SOURCE = `(?:${SEMVER_NUMBER_SOURCE}(?:\\.${SEMVER_NUMBER_SOURCE})?(?:\\+${SEMVER_IDENTIFIER_LIST_SOURCE})?|${FULL_VERSION_SOURCE})`
+const RUNTIME_RANGE_TOKEN_SOURCE = `(?:${FULL_VERSION_SOURCE}|(?:>=|<=|>|<|=)${PARTIAL_COMPARATOR_VERSION_SOURCE})`
+
+/**
+ * Public JSON-Schema/runtime parser grammar for Studio `runtime.version`.
+ *
+ * Bare versions must be full semantic versions. Comparator tokens may use
+ * major/minor shorthand, for example `>=1 <2`. Carets, tildes, logical OR,
+ * shell syntax, and arbitrary free text are intentionally not part of v1.
+ */
+export const FLOWIT_RUNTIME_RANGE_PATTERN =
+  `^\\s*${RUNTIME_RANGE_TOKEN_SOURCE}(?:\\s+${RUNTIME_RANGE_TOKEN_SOURCE})*\\s*$`
+
+const FLOWIT_RUNTIME_RANGE = new RegExp(FLOWIT_RUNTIME_RANGE_PATTERN)
+const FULL_VERSION = new RegExp(`^${FULL_VERSION_SOURCE}$`)
+const PARTIAL_VERSION =
+  /^(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?(?:\.(0|[1-9]\d*))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
+
 export function assertFlowitRuntimeRange(value: string): string {
   const range = value.trim()
   if (!range) throw new Error('Flowit runtime version range must be non-empty')
+  if (!FLOWIT_RUNTIME_RANGE.test(value)) {
+    throw new Error(
+      'Flowit runtime version range must use bounded semantic-version comparators',
+    )
+  }
   parseRuntimeRange(range)
   return range
 }
@@ -121,8 +147,3 @@ function parseComparatorVersion(value: string, label: string): SemanticVersion {
 function numericIdentifier(value: string): number | undefined {
   return /^(0|[1-9]\d*)$/.test(value) ? Number(value) : undefined
 }
-
-const FULL_VERSION =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
-const PARTIAL_VERSION =
-  /^(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?(?:\.(0|[1-9]\d*))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
