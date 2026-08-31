@@ -53,6 +53,46 @@ jobs:
           path.write_text(text.replace(old, new, 1))
           PY
           python /tmp/pr23-round2-fix.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('packages/adapter-codex/src/index.ts')
+          text = path.read_text()
+          old_models = "    const models = rows.flatMap((row: any) => {\n"
+          if text.count(old_models) != 1:
+              raise SystemExit(f'expected one untyped catalog model list, found {text.count(old_models)}')
+          text = text.replace(
+              old_models,
+              "    const models: CatalogModel[] = rows.flatMap((row: any) => {\n",
+              1,
+          )
+          old_efforts = """    supportedReasoningEfforts: [...new Set(rawEfforts.flatMap((item: any) => {
+                if (typeof item === 'string' && item.trim()) return [item.trim()]
+                const effort = firstString(
+                  item?.reasoningEffort,
+                  item?.reasoning_effort,
+                  item?.effort,
+                  item?.value,
+                )
+                return effort ? [effort] : []
+              }))],
+          """
+          new_efforts = """    supportedReasoningEfforts: [...new Set<string>(rawEfforts.flatMap(
+                (item: any): string[] => {
+                  if (typeof item === 'string' && item.trim()) return [item.trim()]
+                  const effort = firstString(
+                    item?.reasoningEffort,
+                    item?.reasoning_effort,
+                    item?.effort,
+                    item?.value,
+                  )
+                  return effort ? [effort] : []
+                },
+              ))],
+          """
+          if text.count(old_efforts) != 1:
+              raise SystemExit(f'expected one untyped effort list, found {text.count(old_efforts)}')
+          path.write_text(text.replace(old_efforts, new_efforts, 1))
+          PY
           rm -rf .github/pr23-round2 .github/workflows/pr23-review-round2.yml
           git diff --check
       - name: Install dependencies
