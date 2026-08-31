@@ -1,5 +1,6 @@
 export * from './types.js'
 export * from './schema.js'
 export * from './trust.js'
+export * from './runtime-range.js'
 export * from './validate.js'
 export * from './store.js'
