@@ -1,0 +1,45 @@
+name: PR23 Review Round 5
+
+on:
+  push:
+    branches:
+      - pr23-review-round5-staging
+
+permissions:
+  contents: write
+
+jobs:
+  apply-review-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Apply reviewed fixes
+        shell: bash
+        run: |
+          python .github/pr23-round5/fix.py
+          rm -rf .github/pr23-round5 .github/workflows/pr23-review-round5.yml
+          git diff --check
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Run repository gate
+        run: pnpm check
+      - name: Publish checked candidate commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          tree=$(git write-tree)
+          commit=$(printf '%s\n' 'fix: preserve retryability for transient Codex preflight failures' \
+            | git commit-tree "$tree" -p 580702872451377a0236f29d36398de0f7c7de56)
+          git push --force origin "$commit":refs/heads/pr23-review-round5-candidate
+          echo "candidate=$commit" >> "$GITHUB_STEP_SUMMARY"
