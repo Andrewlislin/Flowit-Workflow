@@ -125,5 +125,8 @@ async function safeDirectoryNames(root: string): Promise<string[]> {
 }
 
 function isMissing(error: unknown): boolean {
-  return Boolean(error && typeof error === 'object' && (error as NodeJS.ErrnoException).code === 'ENOENT')
+  if (!error || typeof error !== 'object') return false
+  if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true
+  const cause = (error as Error & { cause?: unknown }).cause
+  return cause !== undefined ? isMissing(cause) : false
 }

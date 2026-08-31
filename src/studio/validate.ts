@@ -47,7 +47,7 @@ export async function loadStudioPackage(rootDir: string): Promise<StudioPackageD
     parsed = JSON.parse(await readFile(manifestPath, 'utf8'))
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`unable to read Studio manifest ${manifestPath}: ${message}`)
+    throw new Error(`unable to read Studio manifest ${manifestPath}: ${message}`, { cause: error })
   }
   return {
     rootDir: resolvedRoot,
