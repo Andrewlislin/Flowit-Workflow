@@ -1,3 +1,5 @@
+import { FLOWIT_RUNTIME_RANGE_PATTERN } from './runtime-range.js'
+
 export const FLOWIT_STUDIO_MANIFEST_FILENAME = 'flowit.package.json'
 
 /**
@@ -52,7 +54,7 @@ export const FLOWIT_STUDIO_MANIFEST_SCHEMA = {
       required: ['id', 'version', 'bootstrap'],
       properties: {
         id: { const: 'flowit-workflow' },
-        version: { type: 'string', minLength: 1 },
+        version: { type: 'string', pattern: FLOWIT_RUNTIME_RANGE_PATTERN },
         bootstrap: { const: 'official' },
       },
     },
