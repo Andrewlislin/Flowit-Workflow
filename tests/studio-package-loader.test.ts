@@ -81,7 +81,7 @@ test('manifest parser rejects publisher-controlled install hooks and unsafe runt
           },
         }),
       ),
-    /Flowit runtime range token/,
+    /bounded semantic-version comparators/,
   )
 })
 
@@ -93,7 +93,7 @@ test('Flowit runtime ranges use a bounded semantic-version comparator grammar', 
   assert.equal(flowitRuntimeVersionSatisfies('2.0.0', '>=0.5.0-beta.2 <2'), false)
   assert.throws(
     () => flowitRuntimeVersionSatisfies('0.5.0-beta.2', '^0.5.0'),
-    /full semantic version|numeric semantic-version components/,
+    /bounded semantic-version comparators/,
   )
 })
 
