@@ -21,12 +21,85 @@ export interface AgentSessionDescriptor {
   updatedAt?: string
 }
 export interface SessionContextRef extends AgentSessionRef {}
+
+export type AgentRuntimeMatchPolicy = 'inherit' | 'exact' | 'preferred'
+export interface AgentRuntimeRequirement {
+  model?: string
+  reasoningEffort?: string
+  match: AgentRuntimeMatchPolicy
+}
+export type AgentExecutionCapability =
+  | 'workspace-read'
+  | 'workspace-write'
+  | 'shell'
+  | 'network'
+  | 'browser'
+export interface AgentExecutionRequirement {
+  runtime?: AgentRuntimeRequirement
+  requiredCapabilities?: AgentExecutionCapability[]
+}
+export type AgentSessionPlan =
+  | { kind: 'existing'; sessionId: string }
+  | { kind: 'dedicated'; cwd: string }
+export interface AgentExecutionPreflightRequest {
+  correlationId: string
+  session: AgentSessionPlan
+  requirement: AgentExecutionRequirement
+  skills: readonly string[]
+}
+export type AgentExecutionBlockerCode =
+  | 'EXECUTABLE_UNAVAILABLE'
+  | 'HOST_VERSION_INCOMPATIBLE'
+  | 'MODEL_UNAVAILABLE'
+  | 'REASONING_EFFORT_UNAVAILABLE'
+  | 'SESSION_NOT_FOUND'
+  | 'SESSION_BUSY'
+  | 'SESSION_WRITER_LOCKED'
+  | 'PERMISSION_UNAVAILABLE'
+  | 'SKILL_UNAVAILABLE'
+  | 'UNSUPPORTED'
+export interface AgentExecutionBlocker {
+  code: AgentExecutionBlockerCode
+  message: string
+  retryable: boolean
+}
+export interface AgentExecutionEvidence {
+  host?: {
+    executable?: string
+    version?: string
+    protocolVersion?: string
+  }
+  runtime?: {
+    requestedModel?: string
+    requestedReasoningEffort?: string
+    actualModel?: string
+    actualReasoningEffort?: string
+    verified: boolean
+  }
+  session: {
+    strategy: AgentSessionPlan['kind']
+    sessionId?: string
+    exclusive?: boolean
+  }
+}
+export interface AgentExecutionPreflightResult {
+  status: 'ready' | 'blocked' | 'unsupported'
+  evidence: AgentExecutionEvidence
+  blockers: AgentExecutionBlocker[]
+}
+export interface ProvisionedAgentSession {
+  session: AgentSessionDescriptor
+  managed: boolean
+  evidence: AgentExecutionEvidence
+}
+
 export interface AutomationTarget {
   adapterId?: AdapterId
   sessionId: string
   prompt: string
   skills: string[]
   contextRefs: SessionContextRef[]
+  execution?: AgentExecutionRequirement
 }
 export interface AdapterContextRef {
   adapterId: AdapterId
@@ -40,6 +113,7 @@ export interface AgentDispatchRequest {
   skills: string[]
   contextRefs: AdapterContextRef[]
   attempt?: number
+  execution?: AgentExecutionRequirement
 }
 export interface AgentDispatchResult {
   sessionId: string
@@ -47,6 +121,7 @@ export interface AgentDispatchResult {
   referencedSessions: string[]
   runId?: string
   outputSummary?: string
+  executionEvidence?: AgentExecutionEvidence
 }
 export interface AgentEvent {
   adapterId: AdapterId
@@ -62,12 +137,29 @@ export interface AgentAdapterCapabilities {
   skillBinding: boolean
   contextReference: 'native' | 'summary' | 'none'
   eventSubscription: boolean
+  executionPreflight?: boolean
+  sessionProvisioning?: 'none' | 'dedicated' | 'pool'
+  runtimeSelection?: 'none' | 'session' | 'turn'
+  runtimeIntrospection?: boolean
+  lockInspection?: boolean
 }
 export interface AgentAdapter {
   readonly id: AdapterId
   readonly capabilities: AgentAdapterCapabilities
   start?(signal?: AbortSignal): Promise<void> | void
   listSessions(query?: string, signal?: AbortSignal): Promise<AgentSessionDescriptor[]>
+  preflightExecution?(
+    request: AgentExecutionPreflightRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentExecutionPreflightResult>
+  provisionSession?(
+    request: AgentExecutionPreflightRequest,
+    signal?: AbortSignal,
+  ): Promise<ProvisionedAgentSession>
+  releaseSession?(
+    session: ProvisionedAgentSession,
+    signal?: AbortSignal,
+  ): Promise<void>
   dispatch(request: AgentDispatchRequest, signal?: AbortSignal): Promise<AgentDispatchResult>
   validateSkillBindings?(
     sessionId: string,
@@ -164,6 +256,7 @@ export interface AutomationRunNodeResult {
   loadedSkills: string[]
   referencedSessions: string[]
   outputSummary?: string
+  executionEvidence?: AgentExecutionEvidence
 }
 export interface AutomationRunRecord {
   id: string
