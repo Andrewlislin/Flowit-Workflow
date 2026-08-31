@@ -244,6 +244,9 @@ export class RunOncePipelineRuntime {
           loadedSkills: result.loadedSkills,
           referencedSessions: result.referencedSessions,
           ...(result.outputSummary ? { outputSummary: result.outputSummary } : {}),
+          ...(result.executionEvidence
+            ? { executionEvidence: structuredClone(result.executionEvidence) }
+            : {}),
         }
         running = await this.store.checkpointRun(
           running.id,
