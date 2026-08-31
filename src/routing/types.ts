@@ -1,6 +1,10 @@
 import type {
   AgentAdapterCapabilities,
+  AgentExecutionEvidence,
+  AgentExecutionPreflightResult,
+  AgentExecutionRequirement,
   AgentSessionDescriptor,
+  AgentSessionPlan,
   CreatePipelineInput,
 } from '../core/types.js'
 
@@ -112,7 +116,9 @@ export interface SignedTaskAssessment extends TaskAssessmentResult {
 
 export interface WorkflowTargetBinding {
   readonly adapterId: string
-  readonly sessionId: string
+  readonly sessionId?: string
+  readonly dedicatedCwd?: string
+  readonly execution?: AgentExecutionRequirement
   readonly skills?: readonly string[]
 }
 
@@ -126,9 +132,12 @@ export interface PrepareWorkflowInput {
 export interface ResolvedWorkflowBinding {
   readonly adapterId: string
   readonly sessionId: string
+  readonly sessionPlan: AgentSessionPlan
   readonly session: AgentSessionDescriptor
   readonly capabilities: AgentAdapterCapabilities
   readonly skills: readonly string[]
+  readonly execution?: AgentExecutionRequirement
+  readonly preflight?: AgentExecutionPreflightResult
   readonly fingerprint: string
 }
 
@@ -163,5 +172,7 @@ export interface CommitPreparedWorkflowResult {
   readonly pipelineName: string
   readonly runId?: string
   readonly runStatus: 'running' | 'completed' | 'dead-letter'
+  readonly sessionId?: string
+  readonly executionEvidence?: AgentExecutionEvidence
   readonly error?: string
 }
