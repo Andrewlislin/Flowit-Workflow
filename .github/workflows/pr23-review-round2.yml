@@ -27,6 +27,31 @@ jobs:
         run: |
           base64 --decode .github/pr23-round2/fix.py.gz.b64 \
             | gzip --decompress > /tmp/pr23-round2-fix.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/pr23-round2-fix.py')
+          text = path.read_text()
+          old = """replace_once(service, '    assertPreflightReady(adapterId, preflight)', '    assertExecutionPreflightReady(adapterId, execution, preflight)')
+          replace_once(service, '    assertPreflightReady(adapterId, preflight)', '    assertExecutionPreflightReady(adapterId, execution, preflight)')
+          """
+          new = """service_text = read(service)
+          old_preflight_assert = '    assertPreflightReady(adapterId, preflight)'
+          if service_text.count(old_preflight_assert) != 2:
+              raise SystemExit(
+                  f'{service}: expected two preflight assertions, found {service_text.count(old_preflight_assert)}'
+              )
+          write(
+              service,
+              service_text.replace(
+                  old_preflight_assert,
+                  '    assertExecutionPreflightReady(adapterId, execution, preflight)',
+              ),
+          )
+          """
+          if old not in text:
+              raise SystemExit('round-two patch script hotfix pattern not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
           python /tmp/pr23-round2-fix.py
           rm -rf .github/pr23-round2 .github/workflows/pr23-review-round2.yml
           git diff --check
