@@ -80,7 +80,6 @@ test('Codex preflight validates exact runtime and maps notLoaded Sessions as idl
           reasoningEffort: 'high',
           match: 'exact',
         },
-        requiredCapabilities: ['workspace-write', 'shell'],
       },
       skills: [],
     })
@@ -120,7 +119,6 @@ test('Codex provisions after preflight and sends model/effort as protocol parame
       reasoningEffort: 'high',
       match: 'exact' as const,
     },
-    requiredCapabilities: ['workspace-write' as const, 'shell' as const],
   }
   try {
     const provisioned = await adapter.provisionSession({
@@ -154,6 +152,93 @@ test('Codex provisions after preflight and sends model/effort as protocol parame
     const turn = rows.find(row => row.name === 'turn/start')
     assert.equal(turn?.params.model, 'gpt-test-luna')
     assert.equal(turn?.params.effort, 'high')
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+
+test('Codex capability requirements fail closed without permission evidence', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-permissions-'))
+  const fake = await executionAwareCodex(root)
+  const adapter = new CodexAgentAdapter({ executable: fake.executable, requestTimeoutMs: 1_000 })
+  try {
+    const result = await adapter.preflightExecution({
+      correlationId: 'permissions-1',
+      session: { kind: 'dedicated', cwd: root },
+      requirement: { requiredCapabilities: ['workspace-write', 'shell'] },
+      skills: [],
+    })
+    assert.equal(result.status, 'blocked')
+    assert.equal(result.blockers[0]?.code, 'PERMISSION_UNAVAILABLE')
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+async function catalogCodex(
+  root: string,
+  name: string,
+  models: string[],
+  marker: string,
+): Promise<string> {
+  const executable = path.join(root, name)
+  const source = `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const models = ${JSON.stringify(models)};
+const marker = ${JSON.stringify(marker)};
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+rl.on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialized') return;
+  if (msg.id === undefined || msg.id === null) return;
+  if (msg.method === 'initialize') return send({id:msg.id,result:{userAgent:${JSON.stringify(name)}}});
+  if (msg.method === 'model/list') return send({id:msg.id,result:{data:models.map((id,index)=>({id,isDefault:index===0,supportedReasoningEfforts:['high']}))}});
+  if (msg.method === 'thread/list') return send({id:msg.id,result:{data:[]}});
+  if (msg.method === 'skills/list') return send({id:msg.id,result:{data:[]}});
+  if (msg.method === 'thread/start') { fs.appendFileSync(marker, ${JSON.stringify(name)} + '\\n'); return send({id:msg.id,result:{thread:{id:'chosen-thread',status:'idle',cwd:msg.params.cwd},model:msg.params.model,reasoningEffort:'high',cwd:msg.params.cwd}}); }
+});
+`
+  await writeFile(executable, source, 'utf8')
+  await chmod(executable, 0o755)
+  return executable
+}
+
+test('runtime-aware selection tries a later Codex binary after default startup', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-candidates-'))
+  const marker = path.join(root, 'chosen.txt')
+  const first = await catalogCodex(root, 'codex-first', ['default-only'], marker)
+  const second = await catalogCodex(root, 'codex-second', ['exact-model'], marker)
+  const adapter = new CodexAgentAdapter({
+    executableCandidates: [first, second],
+    requestTimeoutMs: 1_000,
+  })
+  try {
+    await adapter.start()
+    const result = await adapter.preflightExecution({
+      correlationId: 'candidate-1',
+      session: { kind: 'dedicated', cwd: root },
+      requirement: {
+        runtime: { model: 'exact-model', reasoningEffort: 'high', match: 'exact' },
+      },
+      skills: [],
+    })
+    assert.equal(result.status, 'ready')
+    assert.equal(result.evidence.host?.executable, second)
+    const provisioned = await adapter.provisionSession({
+      correlationId: 'candidate-2',
+      session: { kind: 'dedicated', cwd: root },
+      requirement: {
+        runtime: { model: 'exact-model', reasoningEffort: 'high', match: 'exact' },
+      },
+      skills: [],
+    })
+    assert.equal(provisioned.evidence.host?.executable, second)
+    assert.equal((await readFile(marker, 'utf8')).trim(), 'codex-second')
   } finally {
     await adapter.dispose()
     await rm(root, { recursive: true, force: true })

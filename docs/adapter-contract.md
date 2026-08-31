@@ -121,3 +121,8 @@ A future `GeminiCliAgentAdapter`, `OpenHandsAgentAdapter`, etc. should be added 
 - event identity/reconnect behavior documented;
 - capability flags that reflect the actual host API, not product UI affordances;
 - preflight/provisioning tests when the Adapter advertises those optional capabilities.
+
+
+## Durable schema fence
+
+Execution requirements are a durability invariant, not an ignorable extension. Workflow State version 2 fences execution-aware snapshots from older workers: a version 1 reader must reject the database rather than run a target after dropping its runtime or capability requirements. Dedicated Host provisioning is journaled before the Host mutation so crash recovery never starts a second Session for the same confirmed proposal without reconciliation.

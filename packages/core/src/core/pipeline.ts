@@ -243,6 +243,5 @@ async function delay(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms)
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) abort()
-    timer.unref?.()
   })
 }

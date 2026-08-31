@@ -10,6 +10,7 @@ import type {
   AgentSessionPlan,
   ProvisionedAgentSession,
   RunOncePipelineSnapshot,
+  SessionProvisioningIntent,
 } from '../core/types.js'
 import type { RoutingAuthorityService } from './authority.js'
 import { canonicalJson } from './canonical.js'
@@ -87,13 +88,34 @@ export async function commitPreparedWorkflow(
 ): Promise<CommitPreparedWorkflowResult> {
   await core.ready
   signal?.throwIfAborted()
+  const expected = requiredHash(expectedHash, 'expectedHash')
+  const definitionId = `adaptive-run-once:${expected}`
+  const triggerKey = `adaptive:${expected}`
+
+  // Durable state is checked before proposal parsing. Once a proposal has crossed
+  // the confirmation boundary, replay/recovery must not depend on the short-lived
+  // proposal expiry or create another Host Session.
+  const existing = await existingCommitState(core, definitionId, triggerKey)
+  if (existing?.kind === 'terminal') {
+    return terminalCommitResult(expected, definitionId, existing)
+  }
+  if (existing?.kind === 'run') {
+    const admitted = await core.runOncePipelines.startRunOnce(
+      { definitionId, triggerKey, snapshot: existing.snapshot },
+      signal,
+    )
+    return existingRunCommitResult(expected, definitionId, existing.snapshot, admitted)
+  }
+  if (existing?.kind === 'provisioning') {
+    return recoverProvisioningIntent(core, expected, existing.intent, signal)
+  }
+
   const proposal = parsePreparedWorkflowProposal(
     value,
     authority,
     new Date(),
     options.callerContext,
   )
-  const expected = requiredHash(expectedHash, 'expectedHash')
   if (proposal.proposalHash !== expected) {
     throw new Error('adaptive Workflow proposal hash differs from the user-reviewed hash')
   }
@@ -122,60 +144,91 @@ export async function commitPreparedWorkflow(
     )
   }
 
-  const definitionId = `adaptive-run-once:${proposal.proposalHash}`
-  const triggerKey = `adaptive:${proposal.proposalHash}`
-
-  const previous = await existingExecutableSnapshot(core, definitionId, triggerKey)
-  if (previous) {
-    const admitted = await core.runOncePipelines.startRunOnce(
-      { definitionId, triggerKey, snapshot: previous },
-      signal,
-    )
-    return commitResult(proposal, admitted, {
-      action: 'reused',
-      sessionId: previous.nodes[0]?.target.sessionId,
-    })
-  }
-
-  let provisioned: ProvisionedAgentSession | undefined
-  try {
-    let sessionId = proposal.binding.sessionId
-    let executionEvidence = proposal.binding.preflight?.evidence
-    if (proposal.binding.sessionPlan.kind === 'dedicated') {
-      const adapter = await core.adapters.requireStarted(proposal.binding.adapterId, signal)
-      if (!adapter.provisionSession) {
-        throw new Error(
-          `Adapter ${proposal.binding.adapterId} cannot provision the dedicated Session confirmed by the user`,
-        )
-      }
-      provisioned = await adapter.provisionSession(
-        preflightRequest(
-          proposal.binding.adapterId,
-          proposal.binding.sessionPlan,
-          proposal.binding.execution,
-          proposal.binding.skills,
-        ),
-        signal,
-      )
-      assertSessionUsable(provisioned.session, adapter.capabilities)
-      sessionId = requiredString(provisioned.session.sessionId, 'provisioned Session id')
-      executionEvidence = provisioned.evidence
-    }
-
-    const snapshot = materializeSnapshot(proposal, sessionId)
+  if (proposal.binding.sessionPlan.kind === 'existing') {
+    const snapshot = materializeSnapshot(proposal, proposal.binding.sessionPlan.sessionId)
     const admitted = await core.runOncePipelines.startRunOnce(
       { definitionId, triggerKey, snapshot },
       signal,
     )
     return commitResult(proposal, admitted, {
       action: admitted.created ? 'accepted' : 'reused',
-      sessionId,
-      executionEvidence,
+      sessionId: proposal.binding.sessionPlan.sessionId,
+      executionEvidence: proposal.binding.preflight?.evidence,
     })
-  } catch (error) {
+  }
+
+  const intent = createProvisioningIntent(proposal, definitionId, triggerKey)
+  const reservation = await core.store.reserveProvisioningIntent(intent)
+  if (!reservation.created) {
+    return provisioningCommitResult(expected, reservation.intent)
+  }
+
+  let attempted = false
+  let provisioned: ProvisionedAgentSession | undefined
+  try {
+    const adapter = await core.adapters.requireStarted(proposal.binding.adapterId, signal)
+    if (!adapter.provisionSession) {
+      throw new Error(
+        `Adapter ${proposal.binding.adapterId} cannot provision the dedicated Session confirmed by the user`,
+      )
+    }
+    attempted = true
+    provisioned = await adapter.provisionSession(
+      preflightRequest(
+        proposal.binding.adapterId,
+        proposal.binding.sessionPlan,
+        proposal.binding.execution,
+        proposal.binding.skills,
+      ),
+      signal,
+    )
+    assertSessionUsable(provisioned.session, adapter.capabilities)
+    const sessionId = requiredString(provisioned.session.sessionId, 'provisioned Session id')
+    const provisionedIntent: SessionProvisioningIntent = {
+      ...intent,
+      status: 'provisioned',
+      updatedAt: new Date().toISOString(),
+      provisioned: structuredClone(provisioned),
+    }
+    await core.store.replaceProvisioningIntent(provisionedIntent)
+
+    const snapshot = materializeProvisioningSnapshot(intent.pipelineSnapshot, sessionId)
+    const admitted = await core.runOncePipelines.startRunOnce(
+      { definitionId, triggerKey, snapshot },
+      signal,
+    )
+    await core.store.removeProvisioningIntent(intent.id).catch(() => undefined)
+    return commitResult(proposal, admitted, {
+      action: admitted.created ? 'accepted' : 'reused',
+      sessionId,
+      executionEvidence: provisioned.evidence,
+    })
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!attempted) {
+      await core.store.removeProvisioningIntent(intent.id).catch(() => undefined)
+      throw error
+    }
+
+    let released = false
     if (provisioned?.managed) {
       const adapter = core.adapters.get(proposal.binding.adapterId)
-      await adapter?.releaseSession?.(provisioned, signal).catch(() => undefined)
+      try {
+        await adapter?.releaseSession?.(provisioned)
+        released = Boolean(adapter?.releaseSession)
+      } catch {}
+    }
+    if (released) {
+      await core.store.removeProvisioningIntent(intent.id).catch(() => undefined)
+    } else {
+      const uncertain: SessionProvisioningIntent = {
+        ...intent,
+        status: 'uncertain',
+        updatedAt: new Date().toISOString(),
+        ...(provisioned ? { provisioned: structuredClone(provisioned) } : {}),
+        error: `Host Session provisioning outcome requires reconciliation: ${message}`,
+      }
+      await core.store.replaceProvisioningIntent(uncertain).catch(() => undefined)
     }
     throw error
   }
@@ -416,29 +469,193 @@ function materializeSnapshot(
   }
 }
 
-async function existingExecutableSnapshot(
+type ExistingCommitState =
+  | { kind: 'run'; snapshot: RunOncePipelineSnapshot }
+  | {
+      kind: 'terminal'
+      status: 'completed' | 'dead_letter'
+      runId?: string
+      pipelineName?: string
+    }
+  | { kind: 'provisioning'; intent: SessionProvisioningIntent }
+
+async function existingCommitState(
   core: FlowitOrchestrationCore,
   definitionId: string,
   triggerKey: string,
-): Promise<RunOncePipelineSnapshot | undefined> {
+): Promise<ExistingCommitState | undefined> {
   const state = await core.store.snapshot()
   const run = state.runs.findLast(candidate =>
     candidate.kind === 'pipeline' &&
     candidate.definitionId === definitionId &&
     candidate.triggerKey === triggerKey,
   )
-  if (run?.pipelineSnapshot) return structuredClone(run.pipelineSnapshot)
+  if (run?.pipelineSnapshot) {
+    return { kind: 'run', snapshot: structuredClone(run.pipelineSnapshot) }
+  }
   const receipt = state.terminalReceipts.find(candidate =>
     candidate.kind === 'pipeline' &&
     candidate.definitionId === definitionId &&
     candidate.triggerKey === triggerKey,
   )
-  if (!receipt) return undefined
+  if (receipt) {
+    return {
+      kind: 'terminal',
+      status: receipt.status === 'dead_letter' ? 'dead_letter' : 'completed',
+      ...(run?.id ? { runId: run.id } : {}),
+      ...(run?.pipelineSnapshot?.name ? { pipelineName: run.pipelineSnapshot.name } : {}),
+    }
+  }
+  const intent = state.provisioningIntents.find(candidate =>
+    candidate.definitionId === definitionId && candidate.triggerKey === triggerKey,
+  )
+  return intent ? { kind: 'provisioning', intent: structuredClone(intent) } : undefined
+}
+
+function createProvisioningIntent(
+  proposal: PreparedWorkflowProposal,
+  definitionId: string,
+  triggerKey: string,
+): SessionProvisioningIntent {
+  if (proposal.binding.sessionPlan.kind !== 'dedicated') {
+    throw new Error('provisioning intent requires a dedicated Session plan')
+  }
+  const now = new Date().toISOString()
+  return {
+    id: `adaptive-provisioning:${proposal.proposalHash}`,
+    definitionId,
+    triggerKey,
+    adapterId: proposal.binding.adapterId,
+    sessionPlan: structuredClone(proposal.binding.sessionPlan),
+    requirement: structuredClone(proposal.binding.execution ?? {}),
+    skills: [...proposal.binding.skills],
+    pipelineSnapshot: materializeSnapshot(proposal, proposal.binding.sessionId),
+    status: 'reserved',
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+async function recoverProvisioningIntent(
+  core: FlowitOrchestrationCore,
+  proposalHash: string,
+  intent: SessionProvisioningIntent,
+  signal?: AbortSignal,
+): Promise<CommitPreparedWorkflowResult> {
+  if (intent.status !== 'provisioned' || !intent.provisioned) {
+    return provisioningCommitResult(proposalHash, intent)
+  }
+  const sessionId = requiredString(
+    intent.provisioned.session.sessionId,
+    'journaled provisioned Session id',
+  )
+  const snapshot = materializeProvisioningSnapshot(intent.pipelineSnapshot, sessionId)
+  const admitted = await core.runOncePipelines.startRunOnce(
+    { definitionId: intent.definitionId, triggerKey: intent.triggerKey, snapshot },
+    signal,
+  )
+  await core.store.removeProvisioningIntent(intent.id).catch(() => undefined)
+  return {
+    kind: 'adaptive-workflow-commit-result',
+    version: 2,
+    proposalHash,
+    action: admitted.created ? 'accepted' : 'reused',
+    definitionId: intent.definitionId,
+    pipelineName: snapshot.name,
+    ...(admitted.runId ? { runId: admitted.runId } : {}),
+    runStatus: admitted.status === 'dead-letter'
+      ? 'dead-letter'
+      : admitted.status === 'completed'
+        ? 'completed'
+        : 'running',
+    sessionId,
+    executionEvidence: structuredClone(intent.provisioned.evidence),
+    ...(admitted.error ? { error: admitted.error } : {}),
+  }
+}
+
+function provisioningCommitResult(
+  proposalHash: string,
+  intent: SessionProvisioningIntent,
+): CommitPreparedWorkflowResult {
+  return {
+    kind: 'adaptive-workflow-commit-result',
+    version: 2,
+    proposalHash,
+    action: 'reused',
+    definitionId: intent.definitionId,
+    pipelineName: intent.pipelineSnapshot.name,
+    runStatus: 'provisioning',
+    ...(intent.provisioned?.session.sessionId
+      ? { sessionId: intent.provisioned.session.sessionId }
+      : {}),
+    ...(intent.provisioned?.evidence
+      ? { executionEvidence: structuredClone(intent.provisioned.evidence) }
+      : {}),
+    error: intent.error ??
+      'Host Session provisioning is durably reserved; reconciliation is required before another provisioning attempt',
+  }
+}
+
+function terminalCommitResult(
+  proposalHash: string,
+  definitionId: string,
+  terminal: Extract<ExistingCommitState, { kind: 'terminal' }>,
+): CommitPreparedWorkflowResult {
+  return {
+    kind: 'adaptive-workflow-commit-result',
+    version: 2,
+    proposalHash,
+    action: 'reused',
+    definitionId,
+    pipelineName: terminal.pipelineName ?? definitionId,
+    ...(terminal.runId ? { runId: terminal.runId } : {}),
+    runStatus: terminal.status === 'dead_letter' ? 'dead-letter' : 'completed',
+  }
+}
+
+function existingRunCommitResult(
+  proposalHash: string,
+  definitionId: string,
+  snapshot: RunOncePipelineSnapshot,
+  admitted: {
+    runId?: string
+    status: 'accepted' | 'running' | 'completed' | 'dead-letter'
+    error?: string
+  },
+): CommitPreparedWorkflowResult {
+  return {
+    kind: 'adaptive-workflow-commit-result',
+    version: 2,
+    proposalHash,
+    action: 'reused',
+    definitionId,
+    pipelineName: snapshot.name,
+    ...(admitted.runId ? { runId: admitted.runId } : {}),
+    runStatus: admitted.status === 'dead-letter'
+      ? 'dead-letter'
+      : admitted.status === 'completed'
+        ? 'completed'
+        : 'running',
+    ...(snapshot.nodes[0]?.target.sessionId
+      ? { sessionId: snapshot.nodes[0].target.sessionId }
+      : {}),
+    ...(admitted.error ? { error: admitted.error } : {}),
+  }
+}
+
+function materializeProvisioningSnapshot(
+  snapshot: RunOncePipelineSnapshot,
+  sessionId: string,
+): RunOncePipelineSnapshot {
   return {
     version: 1,
-    name: definitionId,
-    nodes: [],
-    edges: [],
+    name: snapshot.name,
+    nodes: snapshot.nodes.map(node => ({
+      ...structuredClone(node),
+      target: { ...structuredClone(node.target), sessionId },
+    })),
+    edges: structuredClone(snapshot.edges),
   }
 }
 

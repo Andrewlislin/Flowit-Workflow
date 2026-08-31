@@ -93,6 +93,23 @@ export interface ProvisionedAgentSession {
   evidence: AgentExecutionEvidence
 }
 
+export type SessionProvisioningIntentStatus = 'reserved' | 'provisioned' | 'uncertain'
+export interface SessionProvisioningIntent {
+  id: string
+  definitionId: string
+  triggerKey: string
+  adapterId: AdapterId
+  sessionPlan: Extract<AgentSessionPlan, { kind: 'dedicated' }>
+  requirement: AgentExecutionRequirement
+  skills: string[]
+  pipelineSnapshot: RunOncePipelineSnapshot
+  status: SessionProvisioningIntentStatus
+  createdAt: string
+  updatedAt: string
+  provisioned?: ProvisionedAgentSession
+  error?: string
+}
+
 export interface AutomationTarget {
   adapterId?: AdapterId
   sessionId: string
@@ -285,12 +302,18 @@ export interface AutomationTerminalReceipt {
   recordedAt: string
 }
 export interface WorkflowState {
-  version: 1
+  /**
+   * Version 2 is the execution-contract fence. Version 1 is accepted only as
+   * an on-load migration input and is rewritten to version 2 before the Store
+   * becomes visible to workers.
+   */
+  version: 1 | 2
   schedules: ScheduledTask[]
   pipelines: PipelineDefinition[]
   eventInbox: PipelineEventAdmission[]
   runs: AutomationRunRecord[]
   terminalReceipts: AutomationTerminalReceipt[]
+  provisioningIntents: SessionProvisioningIntent[]
 }
 
 export interface FlowitCoreConfig {

@@ -171,7 +171,7 @@ export interface CommitPreparedWorkflowResult {
   readonly definitionId: string
   readonly pipelineName: string
   readonly runId?: string
-  readonly runStatus: 'running' | 'completed' | 'dead-letter'
+  readonly runStatus: 'provisioning' | 'running' | 'completed' | 'dead-letter'
   readonly sessionId?: string
   readonly executionEvidence?: AgentExecutionEvidence
   readonly error?: string

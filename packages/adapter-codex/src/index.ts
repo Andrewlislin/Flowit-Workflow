@@ -130,9 +130,10 @@ export class CodexAgentAdapter implements AgentAdapter {
         return { status: 'ready', evidence: baseEvidence, blockers: [] }
       }
 
+      const existingSessionId = request.session.sessionId
       const result = (await client.request('thread/list', { limit: 200 }, signal)) as any
-      const exact = descriptors(result, request.session.sessionId).filter(
-        session => session.sessionId === request.session.sessionId,
+      const exact = descriptors(result, existingSessionId).filter(
+        session => session.sessionId === existingSessionId,
       )
       if (exact.length !== 1) {
         return blocked(
@@ -386,37 +387,63 @@ export class CodexAgentAdapter implements AgentAdapter {
     signal?: AbortSignal,
     runtimeRequirement?: AgentRuntimeRequirement,
   ): Promise<CodexAppServerClient> {
-    if (this.client) {
-      await this.client.start(signal)
-      if (runtimeRequirement) await this.inspectRuntime(this.client, runtimeRequirement, signal)
-      return this.client
+    const errors: Error[] = []
+    const previous = this.client
+    const previousExecutable = this.selectedExecutable
+
+    if (previous) {
+      try {
+        await previous.start(signal)
+        if (runtimeRequirement) {
+          await this.inspectRuntime(previous, runtimeRequirement, signal)
+        }
+        return previous
+      } catch (error: unknown) {
+        errors.push(error instanceof Error ? error : new Error(String(error)))
+        if (!runtimeRequirement) throw errors[0]
+      }
     }
 
-    const errors: Error[] = []
     for (const executable of this.executableCandidates()) {
+      if (previous && executable === previousExecutable) continue
       const candidate = new CodexAppServerClient(
         executable,
         this.config.requestTimeoutMs,
         this.config.serverRequestHandler,
       )
+      const savedExecutable = this.selectedExecutable
       try {
         await candidate.start(signal)
-        if (runtimeRequirement) await this.inspectRuntime(candidate, runtimeRequirement, signal)
-        if (this.client) {
-          await candidate.dispose().catch(() => undefined)
-          return this.client
+        this.selectedExecutable = executable
+        if (runtimeRequirement) {
+          await this.inspectRuntime(candidate, runtimeRequirement, signal)
         }
         this.client = candidate
-        this.selectedExecutable = executable
+        if (previous && previous !== candidate) {
+          await previous.dispose().catch(() => undefined)
+        }
         return candidate
       } catch (error: unknown) {
+        this.selectedExecutable = savedExecutable
         errors.push(error instanceof Error ? error : new Error(String(error)))
         await candidate.dispose().catch(() => undefined)
       }
     }
-    if (errors.length === 1) throw errors[0]
-    throw new AggregateError(errors, 'no compatible Codex executable could start')
-  }
+    const capabilityErrors = errors.filter(
+    (error): error is CodexCapabilityError => error instanceof CodexCapabilityError,
+  )
+  const runtimeError =
+    capabilityErrors.find(
+      error => error.code === 'REASONING_EFFORT_UNAVAILABLE',
+    ) ?? capabilityErrors.find(error => error.code === 'MODEL_UNAVAILABLE')
+  if (runtimeError) throw runtimeError
+  if (errors.length === 1) throw errors[0]
+  const details = errors.map(error => error.message).filter(Boolean).join('; ')
+  throw new AggregateError(
+    errors,
+    `no compatible Codex executable could start${details ? `: ${details}` : ''}`,
+  )
+}
 
   private executableCandidates(): string[] {
     return [...new Set([
@@ -891,11 +918,10 @@ function classifyError(error: unknown): CodexCapabilityError {
 }
 
 function validateRequestedCapabilities(capabilities: readonly string[]): void {
-  const unsupported = capabilities.filter(item => item === 'browser' || item === 'network')
-  if (unsupported.length) {
+  if (capabilities.length > 0) {
     throw new CodexCapabilityError(
       'PERMISSION_UNAVAILABLE',
-      `Codex adapter cannot preflight Host-specific capabilities: ${unsupported.join(', ')}`,
+      `Codex adapter cannot prove requested Host permissions during read-only preflight: ${capabilities.join(', ')}`,
     )
   }
 }

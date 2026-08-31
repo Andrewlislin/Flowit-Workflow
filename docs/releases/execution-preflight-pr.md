@@ -15,3 +15,6 @@ Highlights:
 - two-node coding proposals now include an executor instead of skipping directly from planner to reviewer.
 
 See `docs/execution-preflight.md` and `docs/adapter-contract.md` for the contract and lifecycle.
+
+
+Follow-up hardening adds a Workflow State v2 mixed-version fence, a durable provisioning journal, receipt-only replay, runtime-aware executable reselection after ordinary startup, and fail-closed Codex capability preflight.

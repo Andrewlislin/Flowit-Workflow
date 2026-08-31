@@ -31,9 +31,11 @@ workflow_commit
       ↓
 repeat preflight
       ↓
-provision dedicated Session (when requested)
+reserve a durable provisioning intent (when requested)
       ↓
-materialize real Session id into durable snapshot
+provision dedicated Session
+      ↓
+journal the real Session id, then admit the durable run snapshot
       ↓
 dispatch + checkpoint actual execution evidence
 ```
@@ -94,3 +96,12 @@ export FLOWIT_WORKFLOW_CODEX_BINS="/path/to/new/codex:/usr/local/bin/codex"
 ```
 
 Host-native permissions remain authoritative. Runtime preflight and Session provisioning do not grant filesystem, command, network, browser or approval permissions.
+
+
+## Mixed-version and provisioning fencing
+
+Execution-aware state is persisted as Workflow State version 2. Loading a version 1 database upgrades and rewrites it under the Store lock before workers continue. Older workers only understand version 1 and therefore fail closed when they observe the version 2 database instead of silently discarding `execution` requirements.
+
+A dedicated Session is preceded by a durable provisioning intent. If the process stops after `thread/start` but before run admission, replay observes that reservation and does not create a second Session. A known provisioned Session is recoverable into the run snapshot; an unknown outcome remains `uncertain` and requires reconciliation rather than unsafe automatic retry.
+
+Codex runtime/model preflight is supported. Requested filesystem, shell, network or browser capabilities currently fail closed because the Adapter cannot yet prove the complete effective permission and approval policy without mutating Host state. These capabilities must not be presented as verified merely because a later turn may request approval.

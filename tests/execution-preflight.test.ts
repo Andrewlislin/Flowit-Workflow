@@ -42,6 +42,7 @@ class ProvisioningAdapter implements AgentAdapter {
   readonly preflights: AgentExecutionPreflightRequest[] = []
   readonly provisions: AgentExecutionPreflightRequest[] = []
   readonly dispatches: AgentDispatchRequest[] = []
+  provisionFailure: Error | undefined
 
   async listSessions(): Promise<AgentSessionDescriptor[]> {
     return [{ adapterId: this.id, sessionId: 'existing', status: 'idle' }]
@@ -78,6 +79,7 @@ class ProvisioningAdapter implements AgentAdapter {
     request: AgentExecutionPreflightRequest,
   ): Promise<ProvisionedAgentSession> {
     this.provisions.push(structuredClone(request))
+    if (this.provisionFailure) throw this.provisionFailure
     return {
       managed: true,
       session: {
@@ -264,6 +266,96 @@ test('prepare preflights without provisioning; commit provisions once and materi
       },
     )
     assert.equal(replay.action, 'reused')
+    assert.equal(adapter.provisions.length, 1)
+
+    await core.store.transact(state => {
+      state.runs = []
+    })
+    const receiptOnlyReplay = await commitPreparedWorkflow(
+      core,
+      authority,
+      proposal,
+      proposal.proposalHash,
+      { callerContext: caller('receipt-replay') },
+    )
+    assert.equal(receiptOnlyReplay.action, 'reused')
+    assert.equal(receiptOnlyReplay.runStatus, 'completed')
+    assert.equal(adapter.provisions.length, 1)
+  } finally {
+    await core.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+
+test('a failed provisioning call leaves one durable uncertain intent and never provisions twice', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-execution-uncertain-'))
+  const adapter = new ProvisioningAdapter()
+  adapter.provisionFailure = new Error('connection dropped after thread/start')
+  const core = new FlowitOrchestrationCore({
+    storageFile: path.join(root, 'workflow.json'),
+    defaultAdapterId: adapter.id,
+    activeWorkers: false,
+  }, [adapter])
+  const authority = new RoutingAuthorityService({
+    mode: 'suggest',
+    secret: SECRET,
+    stateFile: path.join(root, 'authority.json'),
+    requireCallerAttestation: true,
+  })
+  try {
+    await core.ready
+    const authorityToken = authority.issueHostAuthority({
+      task: TASK,
+      explicitIntent: 'force-flowit',
+      hostId: 'claude-code',
+      hostSessionId: 'host-session',
+      turnNonce: 'turn-uncertain',
+    })
+    const assessment = authority.assess({
+      task: TASK,
+      authorityToken,
+      signals: {
+        taskKind: 'coding',
+        distinctStages: 2,
+        decomposability: 3,
+        durabilityNeed: 2,
+        reviewNeed: 2,
+        ambiguity: 0,
+        sideEffectRisk: 'reversible',
+      },
+    }, caller('assess-uncertain'))
+    const proposal = await prepareWorkflow(core, authority, {
+      assessmentToken: assessment.assessmentToken,
+      maxNodes: 2,
+      target: {
+        adapterId: adapter.id,
+        dedicatedCwd: root,
+        execution: { runtime: { model: 'gpt-test-luna', match: 'exact' } },
+      },
+    }, { callerContext: caller('prepare-uncertain') })
+    const token = confirmationToken(authority, proposal)
+    await assert.rejects(
+      commitPreparedWorkflow(core, authority, proposal, proposal.proposalHash, {
+        confirmationToken: token,
+        callerContext: caller('commit-uncertain'),
+      }),
+      /connection dropped/,
+    )
+    const state = await core.store.snapshot()
+    assert.equal(state.provisioningIntents.length, 1)
+    assert.equal(state.provisioningIntents[0]?.status, 'uncertain')
+    assert.equal(adapter.provisions.length, 1)
+
+    const replay = await commitPreparedWorkflow(
+      core,
+      authority,
+      proposal,
+      proposal.proposalHash,
+      { callerContext: caller('replay-uncertain') },
+    )
+    assert.equal(replay.runStatus, 'provisioning')
+    assert.match(replay.error ?? '', /reconciliation/)
     assert.equal(adapter.provisions.length, 1)
   } finally {
     await core.dispose()
