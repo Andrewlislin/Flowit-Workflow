@@ -1,6 +1,7 @@
 import type {
   AdapterId,
   AgentExecutionCapability,
+  AgentExecutionPreflightResult,
   AgentExecutionRequirement,
   AgentRuntimeRequirement,
   AutomationTarget,
@@ -68,14 +69,50 @@ export function normalizeExecutionRequirement(
   }
 }
 
+export function requiresExecutionPreflight(
+  value: AgentExecutionRequirement | undefined,
+): boolean {
+  if (!value) return false
+  if ((value.requiredCapabilities?.length ?? 0) > 0) return true
+  return value.runtime?.match === 'exact' || value.runtime?.match === 'preferred'
+}
+
+export function assertExecutionPreflightReady(
+  adapterId: AdapterId,
+  requirement: AgentExecutionRequirement | undefined,
+  result: AgentExecutionPreflightResult,
+): void {
+  if (result.status !== 'ready' || result.blockers.length > 0) {
+    const details = result.blockers.length
+      ? result.blockers.map(item => `${item.code}: ${item.message}`).join('; ')
+      : `status=${result.status}`
+    throw new Error(`Adapter ${adapterId} execution preflight blocked: ${details}`)
+  }
+  if (
+    (requirement?.runtime?.match === 'exact' ||
+      requirement?.runtime?.match === 'preferred') &&
+    result.evidence.runtime?.verified !== true
+  ) {
+    throw new Error(
+      `Adapter ${adapterId} execution preflight returned ready without verified runtime evidence`,
+    )
+  }
+}
+
 function normalizeRuntimeRequirement(value: AgentRuntimeRequirement): AgentRuntimeRequirement {
   if (!['inherit', 'exact', 'preferred'].includes(value.match)) {
     throw new Error('execution.runtime.match must be inherit, exact, or preferred')
   }
   const model = value.model?.trim()
   const reasoningEffort = value.reasoningEffort?.trim()
+  if (value.match === 'inherit' && (model || reasoningEffort)) {
+    throw new Error('inherit runtime matching cannot specify a model or reasoning effort')
+  }
   if (value.match === 'exact' && !model && !reasoningEffort) {
     throw new Error('exact runtime matching requires a model or reasoning effort')
+  }
+  if (value.match === 'preferred' && !model && !reasoningEffort) {
+    throw new Error('preferred runtime matching requires a model or reasoning effort')
   }
   return {
     match: value.match,

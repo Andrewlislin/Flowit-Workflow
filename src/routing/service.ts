@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { FlowitOrchestrationCore } from '../core/runtime.js'
-import { normalizeExecutionRequirement } from '../core/domain.js'
+import {
+  assertExecutionPreflightReady,
+  normalizeExecutionRequirement,
+  requiresExecutionPreflight,
+} from '../core/domain.js'
 import type {
   AgentAdapterCapabilities,
   AgentExecutionPreflightRequest,
@@ -321,7 +325,7 @@ export async function resolveWorkflowBinding(
       preflightRequest(adapterId, sessionPlan, execution, skills),
       signal,
     )
-    assertPreflightReady(adapterId, preflight)
+    assertExecutionPreflightReady(adapterId, execution, preflight)
     const placeholder = dedicatedPlaceholder(adapterId, sessionPlan, execution, skills, preflight)
     const session: AgentSessionDescriptor = {
       adapterId,
@@ -378,8 +382,8 @@ export async function resolveWorkflowBinding(
       preflightRequest(adapterId, sessionPlan, execution, skills),
       signal,
     )
-    assertPreflightReady(adapterId, preflight)
-  } else if (requiresVerifiedPreflight(execution)) {
+    assertExecutionPreflightReady(adapterId, execution, preflight)
+  } else if (requiresExecutionPreflight(execution)) {
     throw new Error(
       `Adapter ${adapterId} has no execution-preflight contract for the requested runtime or capabilities`,
     )
@@ -422,23 +426,6 @@ function preflightRequest(
     requirement,
     skills: [...skills],
   }
-}
-
-function assertPreflightReady(
-  adapterId: string,
-  result: AgentExecutionPreflightResult,
-): void {
-  if (result.status === 'ready' && result.blockers.length === 0) return
-  const details = result.blockers.length
-    ? result.blockers.map(item => `${item.code}: ${item.message}`).join('; ')
-    : `status=${result.status}`
-  throw new Error(`Adapter ${adapterId} execution preflight blocked: ${details}`)
-}
-
-function requiresVerifiedPreflight(execution: AgentExecutionRequirement | undefined): boolean {
-  if (!execution) return false
-  if ((execution.requiredCapabilities?.length ?? 0) > 0) return true
-  return execution.runtime?.match === 'exact' || execution.runtime?.match === 'preferred'
 }
 
 function dedicatedPlaceholder(

@@ -71,11 +71,11 @@ A dedicated plan has no Session id before confirmation. `workflow_prepare` hashe
 
 Runtime matching is explicit:
 
-- `inherit` uses the Host/Session runtime and does not claim an exact model.
-- `exact` must fail closed unless the Adapter can verify the requested model and reasoning effort.
-- `preferred` permits a Host-reported substitute, but the actual runtime must be returned as execution evidence.
+- `inherit` uses the Host/Session runtime and cannot carry a model or reasoning override.
+- `exact` must name a model and/or reasoning effort and fails closed unless the Adapter verifies it.
+- `preferred` must name a preferred model and/or reasoning effort; a verified Host substitute is permitted and recorded as evidence.
 
-Adapters must return structured blockers such as `MODEL_UNAVAILABLE`, `SESSION_BUSY`, `SESSION_WRITER_LOCKED`, `PERMISSION_UNAVAILABLE` or `HOST_VERSION_INCOMPATIBLE`. Do not turn every preflight failure into an unclassified string.
+Adapters must return structured blockers such as `MODEL_UNAVAILABLE`, `SESSION_BUSY`, `SESSION_WRITER_LOCKED`, `PERMISSION_UNAVAILABLE` or `HOST_VERSION_INCOMPATIBLE`. Do not turn every preflight failure into an unclassified string. The Core dispatcher enforces this contract for direct dispatch, persistent Pipelines, Schedules and run-once recovery: exact/preferred runtime or required-capability targets cannot reach `dispatch()` unless the Adapter advertises and passes `preflightExecution()` immediately before execution.
 
 Provisioning is a mutation and therefore occurs only after the proposal confirmation boundary. A managed Session that was created but not durably admitted should be released or archived on a best-effort compensation path. Once admitted, its stable Session id belongs to the run snapshot so retries do not silently switch execution environments.
 
@@ -106,7 +106,7 @@ Adapters that can replay/cursor their own source should advance host acknowledge
 - Do not claim Skill binding succeeded unless the execution boundary fails closed when requested binding is unavailable.
 - Do not claim an exact model or reasoning effort unless the Host response or catalog verifies it.
 - Keep execution preflight read-only; resource creation belongs after confirmation.
-- Serialize concurrent dispatches to the same `(adapterId, sessionId)` in the Core dispatcher.
+- Serialize concurrent dispatches to the same `(adapterId, sessionId)` in the Core dispatcher. Runtime-specific Adapter clients must not terminate work or event subscriptions owned by other Sessions.
 - Use stable host event IDs; never synthesize replay identity from wall-clock receipt time.
 - Cross-adapter context fails closed until an explicit provenance-carrying Context Bridge exists.
 - Startup/disposal must be cancel-safe. If an Adapter owns a child process, startup cancellation or disposal must terminate/reject outstanding host work rather than leave an invisible background process.

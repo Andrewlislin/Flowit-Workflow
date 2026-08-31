@@ -40,17 +40,17 @@ journal the real Session id, then admit the durable run snapshot
 dispatch + checkpoint actual execution evidence
 ```
 
-`workflow_prepare` does not call `provisionSession()`. A failed preflight therefore does not leave behind a user-visible Host task or an active Flowit Pipeline. Resource creation is behind the same proposal confirmation that covers the nodes, runtime, workspace and permissions.
+`workflow_prepare` does not call `provisionSession()`. A failed preflight therefore does not leave behind a user-visible Host task or an active Flowit Pipeline. Resource creation is behind the same proposal confirmation that covers the nodes, runtime, workspace and permissions. The same fail-closed preflight is also enforced by the Core dispatcher for non-Adaptive direct dispatch, persistent Pipelines and Schedules.
 
 ## Runtime policy
 
 The runtime requirement supports three policies:
 
-- `inherit`: use the existing Host/Session configuration. No exact model claim is made.
-- `exact`: the requested model and/or reasoning effort must be verified. Any mismatch blocks preparation or execution.
-- `preferred`: the Adapter may accept a Host-reported substitute, but the actual runtime is recorded as evidence.
+- `inherit`: use the existing Host/Session configuration. It cannot include `model` or `reasoningEffort`, because either field is an override.
+- `exact`: a requested model and/or reasoning effort must be verified. Any mismatch blocks preparation or execution.
+- `preferred`: a preferred model and/or reasoning effort is required. The Adapter may use a verified Host-reported substitute, but the actual runtime is recorded as evidence.
 
-For Codex, the Adapter uses `model/list` during preflight, `thread/start` for a dedicated Session, and explicit `model`/`effort` fields at the turn boundary. Exact requests disable provider fallback.
+For Codex, the Adapter uses `model/list` during preflight, `thread/start` for a dedicated Session, and explicit `model`/`effort` fields at the turn boundary. The catalog's `model` field is the runtime override; its independent `id` field is only the catalog/picker identity. Exact reasoning fails closed even when the advertised supported-effort array is empty. Runtime-specific App Server clients are retained concurrently, and Adapter event listeners are attached to every live client.
 
 ## Existing versus dedicated Sessions
 

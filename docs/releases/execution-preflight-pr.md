@@ -18,3 +18,8 @@ See `docs/execution-preflight.md` and `docs/adapter-contract.md` for the contrac
 
 
 Follow-up hardening adds a Workflow State v2 mixed-version fence, a durable provisioning journal, receipt-only replay, runtime-aware executable reselection after ordinary startup, and fail-closed Codex capability preflight.
+
+- enforce exact/preferred runtime and capability contracts in the shared Core dispatcher for every execution path;
+- retain one Codex App Server client per executable so runtime selection cannot interrupt unrelated Sessions or detach event subscriptions;
+- distinguish Codex catalog `id` from the actual `model` override and reject exact reasoning requests not present in the advertised effort list;
+- make `inherit`, `exact`, and `preferred` runtime policies structurally disjoint during normalization.

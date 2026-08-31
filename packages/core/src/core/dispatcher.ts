@@ -8,7 +8,12 @@ import type {
 import { AgentAdapterRegistry } from './adapter.js'
 import { ContextGraph } from './context-graph.js'
 import { SkillBinder } from './skill-binding.js'
-import { adapterIdOf } from './domain.js'
+import {
+  adapterIdOf,
+  assertExecutionPreflightReady,
+  normalizeExecutionRequirement,
+  requiresExecutionPreflight,
+} from './domain.js'
 
 export interface DispatchResult extends AgentDispatchResult { adapterId: string }
 
@@ -42,6 +47,28 @@ export class OrchestrationDispatcher {
     return this.serializeTarget(`${adapterId}\u0000${sessionId}`, async () => {
       signal?.throwIfAborted()
       const adapter = await this.adapters.requireStarted(adapterId, signal)
+      const skills = this.skillBinder.normalize(target.skills)
+      const execution = target.execution
+        ? normalizeExecutionRequirement(target.execution)
+        : undefined
+      if (requiresExecutionPreflight(execution)) {
+        if (adapter.capabilities.executionPreflight !== true || !adapter.preflightExecution) {
+          throw new Error(
+            `Adapter ${adapterId} cannot verify the requested execution contract`,
+          )
+        }
+        const preflight = await adapter.preflightExecution(
+          {
+            correlationId: `dispatch-preflight:${correlationId}`,
+            session: { kind: 'existing', sessionId },
+            requirement: structuredClone(execution ?? {}),
+            skills: [...skills],
+          },
+          signal,
+        )
+        assertExecutionPreflightReady(adapterId, execution, preflight)
+      }
+      signal?.throwIfAborted()
       const refs = this.contextGraph.normalize(
         [...target.contextRefs, ...extraRefs],
         this.defaultAdapterId,
@@ -58,11 +85,9 @@ export class OrchestrationDispatcher {
           attempt,
           sessionId,
           prompt: target.prompt,
-          skills: this.skillBinder.normalize(target.skills),
+          skills,
           contextRefs,
-          ...(target.execution
-            ? { execution: structuredClone(target.execution) }
-            : {}),
+          ...(execution ? { execution: structuredClone(execution) } : {}),
         },
         signal,
       )

@@ -46,6 +46,24 @@ interface ResolvedRuntime {
   actualReasoningEffort?: string
   verified: boolean
 }
+interface SelectedCodexClient {
+  client: CodexAppServerClient
+  executable: string
+  runtime: ResolvedRuntime
+}
+interface CodexClientEntry {
+  client: CodexAppServerClient
+  stopNotifications: () => void
+}
+interface CatalogModel {
+  id: string
+  model: string
+  isDefault: boolean
+  defaultReasoningEffort: string
+  supportedReasoningEfforts: string[]
+}
+type CodexEventListener = (event: AgentEvent) => Promise<void> | void
+
 
 class CodexCapabilityError extends Error {
   constructor(
@@ -75,8 +93,10 @@ export class CodexAgentAdapter implements AgentAdapter {
     Pick<CodexAdapterConfig, 'requestTimeoutMs' | 'turnTimeoutMs'>
   > &
     CodexAdapterConfig
-  private client: CodexAppServerClient | undefined
-  private selectedExecutable: string | undefined
+  private readonly clients = new Map<string, CodexClientEntry>()
+  private readonly eventListeners = new Set<CodexEventListener>()
+  private readonly sessionExecutables = new Map<string, string>()
+  private defaultExecutable: string | undefined
 
   constructor(config: CodexAdapterConfig = {}) {
     this.config = {
@@ -87,12 +107,16 @@ export class CodexAgentAdapter implements AgentAdapter {
   }
 
   async start(signal?: AbortSignal): Promise<void> {
-    await this.getClient(signal)
+    await this.selectClient(signal)
   }
 
   async listSessions(query = '', signal?: AbortSignal): Promise<AgentSessionDescriptor[]> {
-    const client = await this.getClient(signal)
-    const result = (await client.request('thread/list', { limit: 200 }, signal)) as any
+    const selected = await this.selectClient(signal)
+    const result = (await selected.client.request(
+      'thread/list',
+      { limit: 200 },
+      signal,
+    )) as any
     return descriptors(result, query)
   }
 
@@ -102,15 +126,19 @@ export class CodexAgentAdapter implements AgentAdapter {
     signal?: AbortSignal,
   ): Promise<void> {
     if (skills.length === 0) return
-    const client = await this.getClient(signal)
-    const snapshot = (await client.request(
+    const selected = await this.selectClient(
+      signal,
+      undefined,
+      this.sessionExecutables.get(sessionId),
+    )
+    const snapshot = (await selected.client.request(
       'thread/read',
       { threadId: sessionId, includeTurns: false },
       signal,
     )) as any
     const thread = snapshot?.thread ?? snapshot
     const cwd = typeof thread?.cwd === 'string' ? thread.cwd : (this.config.cwd ?? process.cwd())
-    await this.resolveSkills(client, [...skills], cwd, signal)
+    await this.resolveSkills(selected.client, [...skills], cwd, signal)
   }
 
   async preflightExecution(
@@ -119,19 +147,34 @@ export class CodexAgentAdapter implements AgentAdapter {
   ): Promise<AgentExecutionPreflightResult> {
     signal?.throwIfAborted()
     const runtimeRequirement = request.requirement.runtime
+    let selected: SelectedCodexClient | undefined
     try {
       validateRequestedCapabilities(request.requirement.requiredCapabilities ?? [])
-      const client = await this.getClient(signal, runtimeRequirement)
-      const runtime = await this.inspectRuntime(client, runtimeRequirement, signal)
-      const baseEvidence = this.executionEvidence(request, runtime)
+      selected = await this.selectClient(
+        signal,
+        runtimeRequirement,
+        request.session.kind === 'existing'
+          ? this.sessionExecutables.get(request.session.sessionId)
+          : undefined,
+      )
+      const baseEvidence = this.executionEvidence(request, selected.runtime, selected)
 
       if (request.session.kind === 'dedicated') {
-        await this.resolveSkills(client, [...request.skills], request.session.cwd, signal)
+        await this.resolveSkills(
+          selected.client,
+          [...request.skills],
+          request.session.cwd,
+          signal,
+        )
         return { status: 'ready', evidence: baseEvidence, blockers: [] }
       }
 
       const existingSessionId = request.session.sessionId
-      const result = (await client.request('thread/list', { limit: 200 }, signal)) as any
+      const result = (await selected.client.request(
+        'thread/list',
+        { limit: 200 },
+        signal,
+      )) as any
       const exact = descriptors(result, existingSessionId).filter(
         session => session.sessionId === existingSessionId,
       )
@@ -140,8 +183,8 @@ export class CodexAgentAdapter implements AgentAdapter {
           baseEvidence,
           'SESSION_NOT_FOUND',
           exact.length === 0
-            ? `Codex Session ${request.session.sessionId} was not found`
-            : `Codex Session ${request.session.sessionId} is ambiguous`,
+            ? `Codex Session ${existingSessionId} was not found`
+            : `Codex Session ${existingSessionId} is ambiguous`,
           false,
         )
       }
@@ -171,16 +214,21 @@ export class CodexAgentAdapter implements AgentAdapter {
         )
       }
       await this.resolveSkills(
-        client,
+        selected.client,
         [...request.skills],
         session.cwd ?? this.config.cwd ?? process.cwd(),
         signal,
       )
+      this.sessionExecutables.set(existingSessionId, selected.executable)
       return { status: 'ready', evidence, blockers: [] }
     } catch (error: unknown) {
       const classified = classifyError(error)
       return blocked(
-        this.executionEvidence(request, runtimeFromRequirement(runtimeRequirement, false)),
+        this.executionEvidence(
+          request,
+          runtimeFromRequirement(runtimeRequirement, false),
+          selected,
+        ),
         classified.code,
         classified.message,
         classified.retryable,
@@ -198,16 +246,22 @@ export class CodexAgentAdapter implements AgentAdapter {
     }
     validateRequestedCapabilities(request.requirement.requiredCapabilities ?? [])
     const runtimeRequirement = request.requirement.runtime
-    const client = await this.getClient(signal, runtimeRequirement)
-    await this.resolveSkills(client, [...request.skills], request.session.cwd, signal)
-    const response = (await client.request(
+    const selected = await this.selectClient(signal, runtimeRequirement)
+    await this.resolveSkills(selected.client, [...request.skills], request.session.cwd, signal)
+    const response = (await selected.client.request(
       'thread/start',
       {
         cwd: request.session.cwd,
-        ...(runtimeRequirement?.model ? { model: runtimeRequirement.model } : {}),
-        allowProviderModelFallback: runtimeRequirement?.match === 'preferred',
-        ...(runtimeRequirement?.reasoningEffort
-          ? { config: { model_reasoning_effort: runtimeRequirement.reasoningEffort } }
+        ...(selected.runtime.actualModel
+          ? { model: selected.runtime.actualModel }
+          : {}),
+        allowProviderModelFallback: false,
+        ...(selected.runtime.actualReasoningEffort
+          ? {
+              config: {
+                model_reasoning_effort: selected.runtime.actualReasoningEffort,
+              },
+            }
           : {}),
       },
       signal,
@@ -215,7 +269,11 @@ export class CodexAgentAdapter implements AgentAdapter {
     const thread = response?.thread ?? response
     const sessionId = String(thread?.id ?? thread?.threadId ?? '')
     if (!sessionId) throw new Error('Codex thread/start returned no thread id')
-    const runtime = runtimeFromHostResponse(response, runtimeRequirement)
+    const runtime = runtimeFromHostResponse(
+      response,
+      runtimeRequirement,
+      selected.runtime,
+    )
     assertRuntimeMatch(runtimeRequirement, runtime)
     const session: AgentSessionDescriptor = {
       adapterId: this.id,
@@ -224,12 +282,14 @@ export class CodexAgentAdapter implements AgentAdapter {
       status: isThreadRunning(thread) ? 'live' : 'idle',
       name: typeof thread?.name === 'string' ? thread.name : 'Flowit dedicated Codex Session',
     }
+    this.sessionExecutables.set(sessionId, selected.executable)
     return {
       session,
       managed: true,
       evidence: this.executionEvidence(
         { ...request, session: { kind: 'dedicated', cwd: request.session.cwd } },
         runtime,
+        selected,
         sessionId,
       ),
     }
@@ -237,13 +297,19 @@ export class CodexAgentAdapter implements AgentAdapter {
 
   async releaseSession(session: ProvisionedAgentSession, signal?: AbortSignal): Promise<void> {
     if (!session.managed) return
-    const client = await this.getClient(signal)
-    await client.request(
+    const sessionId = session.session.sessionId
+    const selected = await this.selectClient(
+      signal,
+      undefined,
+      session.evidence.host?.executable ?? this.sessionExecutables.get(sessionId),
+    )
+    await selected.client.request(
       'thread/archive',
-      { threadId: session.session.sessionId },
+      { threadId: sessionId },
       signal,
       5_000,
     )
+    this.sessionExecutables.delete(sessionId)
   }
 
   async dispatch(
@@ -252,16 +318,26 @@ export class CodexAgentAdapter implements AgentAdapter {
   ): Promise<AgentDispatchResult> {
     signal?.throwIfAborted()
     const runtimeRequirement = request.execution?.runtime
-    const client = await this.getClient(signal, runtimeRequirement)
+    const selected = await this.selectClient(
+      signal,
+      runtimeRequirement,
+      this.sessionExecutables.get(request.sessionId),
+    )
     let resumed: any
     try {
-      resumed = await client.request(
+      resumed = await selected.client.request(
         'thread/resume',
         {
           threadId: request.sessionId,
-          ...(runtimeRequirement?.model ? { model: runtimeRequirement.model } : {}),
-          ...(runtimeRequirement?.reasoningEffort
-            ? { config: { model_reasoning_effort: runtimeRequirement.reasoningEffort } }
+          ...(selected.runtime.actualModel
+            ? { model: selected.runtime.actualModel }
+            : {}),
+          ...(selected.runtime.actualReasoningEffort
+            ? {
+                config: {
+                  model_reasoning_effort: selected.runtime.actualReasoningEffort,
+                },
+              }
             : {}),
         },
         signal,
@@ -285,15 +361,20 @@ export class CodexAgentAdapter implements AgentAdapter {
         true,
       )
     }
-    const runtime = runtimeFromHostResponse(resumed, runtimeRequirement)
+    const runtime = runtimeFromHostResponse(
+      resumed,
+      runtimeRequirement,
+      selected.runtime,
+    )
     assertRuntimeMatch(runtimeRequirement, runtime)
+    this.sessionExecutables.set(request.sessionId, selected.executable)
     const cwd = typeof resumed?.cwd === 'string'
       ? resumed.cwd
       : typeof thread?.cwd === 'string'
         ? thread.cwd
         : (this.config.cwd ?? process.cwd())
-    const skills = await this.resolveSkills(client, request.skills, cwd, signal)
-    const contexts = await this.resolveContext(client, request.contextRefs, signal)
+    const skills = await this.resolveSkills(selected.client, request.skills, cwd, signal)
+    const contexts = await this.resolveContext(selected.client, request.contextRefs, signal)
     const skillPrefix = skills.map(skill => `$${skill.name}`).join(' ')
     const text = renderTask(
       skillPrefix ? `${skillPrefix} ${request.prompt}` : request.prompt,
@@ -301,14 +382,14 @@ export class CodexAgentAdapter implements AgentAdapter {
     )
     const input: any[] = [{ type: 'text', text }]
     for (const skill of skills) input.push({ type: 'skill', name: skill.name, path: skill.path })
-    const started = (await client.request(
+    const started = (await selected.client.request(
       'turn/start',
       {
         threadId: request.sessionId,
         input,
-        ...(runtimeRequirement?.model ? { model: runtimeRequirement.model } : {}),
-        ...(runtimeRequirement?.reasoningEffort
-          ? { effort: runtimeRequirement.reasoningEffort }
+        ...(runtime.actualModel ? { model: runtime.actualModel } : {}),
+        ...(runtime.actualReasoningEffort
+          ? { effort: runtime.actualReasoningEffort }
           : {}),
       },
       signal,
@@ -317,7 +398,7 @@ export class CodexAgentAdapter implements AgentAdapter {
     if (!turnId) throw new Error('Codex turn/start returned no turn id')
     let completion: any
     try {
-      completion = await client.waitFor(
+      completion = await selected.client.waitFor(
         'turn/completed',
         params =>
           String(params?.threadId ?? params?.thread_id ?? '') === request.sessionId &&
@@ -326,13 +407,13 @@ export class CodexAgentAdapter implements AgentAdapter {
         this.config.turnTimeoutMs,
       )
     } catch (error: unknown) {
-      await client
+      await selected.client
         .request('turn/interrupt', { threadId: request.sessionId, turnId }, undefined, 5_000)
         .catch(() => undefined)
       throw error
     }
     assertSuccessfulTurn(completion?.turn, request.sessionId, turnId)
-    const snapshot = await client
+    const snapshot = await selected.client
       .request('thread/read', { threadId: request.sessionId, includeTurns: true }, signal)
       .catch(() => undefined)
     return {
@@ -348,6 +429,7 @@ export class CodexAgentAdapter implements AgentAdapter {
           skills: request.skills,
         },
         runtime,
+        selected,
         request.sessionId,
       ),
       ...(snapshot
@@ -356,94 +438,69 @@ export class CodexAgentAdapter implements AgentAdapter {
     }
   }
 
-  subscribe(listener: (event: AgentEvent) => Promise<void> | void): () => void {
-    let active = true
-    let unsubscribe: (() => void) | undefined
-    void this.getClient()
-      .then(client => {
-        if (!active) return
-        unsubscribe = client.onNotification(async (method, params) => {
-          if (!active) return
-          const event = mapCodexEvent(method, params)
-          if (event) await listener(event)
-        })
-        if (!active) unsubscribe()
-      })
-      .catch(() => undefined)
-    return () => {
-      active = false
-      unsubscribe?.()
-    }
+  subscribe(listener: CodexEventListener): () => void {
+    this.eventListeners.add(listener)
+    void this.selectClient().catch(() => undefined)
+    return () => this.eventListeners.delete(listener)
   }
 
   async dispose(): Promise<void> {
-    const client = this.client
-    this.client = undefined
-    this.selectedExecutable = undefined
-    await client?.dispose()
+    const entries = [...this.clients.values()]
+    this.clients.clear()
+    this.eventListeners.clear()
+    this.sessionExecutables.clear()
+    this.defaultExecutable = undefined
+    await Promise.all(entries.map(async entry => {
+      entry.stopNotifications()
+      await entry.client.dispose()
+    }))
   }
 
-  private async getClient(
+  private async selectClient(
     signal?: AbortSignal,
     runtimeRequirement?: AgentRuntimeRequirement,
-  ): Promise<CodexAppServerClient> {
+    preferredExecutable?: string,
+  ): Promise<SelectedCodexClient> {
+    validateRuntimeRequirement(runtimeRequirement)
     const errors: Error[] = []
-    const previous = this.client
-    const previousExecutable = this.selectedExecutable
+    const inspect = runtimeRequirement?.match === 'exact' ||
+      runtimeRequirement?.match === 'preferred'
 
-    if (previous) {
+    for (const executable of this.orderedExecutableCandidates(preferredExecutable)) {
       try {
-        await previous.start(signal)
-        if (runtimeRequirement) {
-          await this.inspectRuntime(previous, runtimeRequirement, signal)
-        }
-        return previous
+        const client = await this.getOrCreateClient(executable, signal)
+        const runtime = inspect
+          ? await this.inspectRuntime(client, runtimeRequirement, executable, signal)
+          : runtimeFromRequirement(runtimeRequirement, false)
+        this.defaultExecutable ??= executable
+        return { client, executable, runtime }
       } catch (error: unknown) {
         errors.push(error instanceof Error ? error : new Error(String(error)))
-        if (!runtimeRequirement) throw errors[0]
       }
     }
 
-    for (const executable of this.executableCandidates()) {
-      if (previous && executable === previousExecutable) continue
-      const candidate = new CodexAppServerClient(
-        executable,
-        this.config.requestTimeoutMs,
-        this.config.serverRequestHandler,
-      )
-      const savedExecutable = this.selectedExecutable
-      try {
-        await candidate.start(signal)
-        this.selectedExecutable = executable
-        if (runtimeRequirement) {
-          await this.inspectRuntime(candidate, runtimeRequirement, signal)
-        }
-        this.client = candidate
-        if (previous && previous !== candidate) {
-          await previous.dispose().catch(() => undefined)
-        }
-        return candidate
-      } catch (error: unknown) {
-        this.selectedExecutable = savedExecutable
-        errors.push(error instanceof Error ? error : new Error(String(error)))
-        await candidate.dispose().catch(() => undefined)
-      }
-    }
     const capabilityErrors = errors.filter(
-    (error): error is CodexCapabilityError => error instanceof CodexCapabilityError,
-  )
-  const runtimeError =
-    capabilityErrors.find(
-      error => error.code === 'REASONING_EFFORT_UNAVAILABLE',
-    ) ?? capabilityErrors.find(error => error.code === 'MODEL_UNAVAILABLE')
-  if (runtimeError) throw runtimeError
-  if (errors.length === 1) throw errors[0]
-  const details = errors.map(error => error.message).filter(Boolean).join('; ')
-  throw new AggregateError(
-    errors,
-    `no compatible Codex executable could start${details ? `: ${details}` : ''}`,
-  )
-}
+      (error): error is CodexCapabilityError => error instanceof CodexCapabilityError,
+    )
+    const runtimeError =
+      capabilityErrors.find(error => error.code === 'REASONING_EFFORT_UNAVAILABLE') ??
+      capabilityErrors.find(error => error.code === 'MODEL_UNAVAILABLE')
+    if (runtimeError) throw runtimeError
+    if (errors.length === 1) throw errors[0]
+    const details = errors.map(error => error.message).filter(Boolean).join('; ')
+    throw new AggregateError(
+      errors,
+      `no compatible Codex executable could start${details ? `: ${details}` : ''}`,
+    )
+  }
+
+  private orderedExecutableCandidates(preferredExecutable?: string): string[] {
+    return [...new Set([
+      preferredExecutable,
+      this.defaultExecutable,
+      ...this.executableCandidates(),
+    ].filter((item): item is string => typeof item === 'string' && Boolean(item.trim())))]
+  }
 
   private executableCandidates(): string[] {
     return [...new Set([
@@ -453,22 +510,57 @@ export class CodexAgentAdapter implements AgentAdapter {
     ].map(item => item.trim()).filter(Boolean))]
   }
 
+  private async getOrCreateClient(
+    executable: string,
+    signal?: AbortSignal,
+  ): Promise<CodexAppServerClient> {
+    let entry = this.clients.get(executable)
+    if (!entry) {
+      const client = new CodexAppServerClient(
+        executable,
+        this.config.requestTimeoutMs,
+        this.config.serverRequestHandler,
+      )
+      entry = {
+        client,
+        stopNotifications: client.onNotification(
+          (method, params) => this.forwardNotification(method, params),
+        ),
+      }
+      this.clients.set(executable, entry)
+    }
+    try {
+      await entry.client.start(signal)
+      return entry.client
+    } catch (error) {
+      if (this.clients.get(executable) === entry) {
+        this.clients.delete(executable)
+        entry.stopNotifications()
+        await entry.client.dispose().catch(() => undefined)
+      }
+      throw error
+    }
+  }
+
+  private async forwardNotification(method: string, params: any): Promise<void> {
+    const event = mapCodexEvent(method, params)
+    if (!event) return
+    for (const listener of [...this.eventListeners]) await listener(event)
+  }
+
   private async inspectRuntime(
     client: CodexAppServerClient,
-    requirement: AgentRuntimeRequirement | undefined,
+    requirement: AgentRuntimeRequirement,
+    executable: string,
     signal?: AbortSignal,
   ): Promise<ResolvedRuntime> {
-    if (!requirement) return { verified: false }
     let result: any
     try {
       result = await client.request('model/list', { includeHidden: true }, signal)
     } catch (error: unknown) {
-      if (requirement.match === 'inherit' && !requirement.model && !requirement.reasoningEffort) {
-        return runtimeFromRequirement(requirement, false)
-      }
       throw new CodexCapabilityError(
         'HOST_VERSION_INCOMPATIBLE',
-        `Codex app-server cannot enumerate models required for runtime preflight: ${error instanceof Error ? error.message : String(error)}`,
+        `Codex app-server ${executable} cannot enumerate models required for runtime preflight: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
     const rows = Array.isArray(result?.data)
@@ -476,45 +568,64 @@ export class CodexAgentAdapter implements AgentAdapter {
       : Array.isArray(result?.models)
         ? result.models
         : []
+    const models: CatalogModel[] = rows.flatMap((row: any) => {
+      const parsed = catalogModel(row)
+      return parsed ? [parsed] : []
+    })
+    if (rows.length > 0 && models.length === 0) {
+      throw new CodexCapabilityError(
+        'HOST_VERSION_INCOMPATIBLE',
+        `Codex app-server ${executable} returned a model catalog without the required id, model, defaultReasoningEffort, and supportedReasoningEfforts fields`,
+      )
+    }
+
     const requestedModel = requirement.model
     const requestedEffort = requirement.reasoningEffort
+    const fallback = models.find(model => model.isDefault) ?? models[0]
     let selected = requestedModel
-      ? rows.find((row: any) => modelId(row) === requestedModel)
-      : rows.find((row: any) => row?.isDefault === true || row?.default === true) ?? rows[0]
-    if (!selected && requirement.match === 'preferred') {
-      selected = rows.find((row: any) => row?.isDefault === true || row?.default === true) ?? rows[0]
-    }
-    if (requestedModel && !selected) {
+      ? models.find(model => model.model === requestedModel)
+      : fallback
+    if (!selected && requirement.match === 'preferred') selected = fallback
+    if (!selected) {
       throw new CodexCapabilityError(
         'MODEL_UNAVAILABLE',
-        `Codex model ${requestedModel} is unavailable in ${this.selectedExecutable ?? 'the selected executable'}`,
+        requestedModel
+          ? `Codex model ${requestedModel} is unavailable in ${executable}`
+          : `Codex app-server ${executable} has no selectable model`,
       )
     }
-    const efforts = supportedEfforts(selected)
-    if (requestedEffort && efforts.length > 0 && !efforts.includes(requestedEffort)) {
-      throw new CodexCapabilityError(
-        'REASONING_EFFORT_UNAVAILABLE',
-        `Codex model ${modelId(selected) ?? requestedModel ?? 'default'} does not support reasoning effort ${requestedEffort}`,
-      )
+
+    let actualReasoningEffort = selected.defaultReasoningEffort
+    if (requestedEffort) {
+      if (selected.supportedReasoningEfforts.includes(requestedEffort)) {
+        actualReasoningEffort = requestedEffort
+      } else if (requirement.match === 'exact') {
+        throw new CodexCapabilityError(
+          'REASONING_EFFORT_UNAVAILABLE',
+          `Codex model ${selected.model} (${selected.id}) does not support reasoning effort ${requestedEffort}`,
+        )
+      }
     }
+
     return {
       ...(requestedModel ? { requestedModel } : {}),
       ...(requestedEffort ? { requestedReasoningEffort: requestedEffort } : {}),
-      ...(selected && modelId(selected) ? { actualModel: modelId(selected)! } : {}),
-      ...(requestedEffort ? { actualReasoningEffort: requestedEffort } : {}),
-      verified: Boolean(selected || (!requestedModel && !requestedEffort)),
+      actualModel: selected.model,
+      actualReasoningEffort,
+      verified: true,
     }
   }
 
   private executionEvidence(
     request: AgentExecutionPreflightRequest,
     runtime: ResolvedRuntime,
+    selected?: SelectedCodexClient,
     sessionId?: string,
   ): AgentExecutionEvidence {
-    const info = this.client?.info
+    const info = selected?.client.info
     return {
       host: {
-        ...(this.selectedExecutable ? { executable: this.selectedExecutable } : {}),
+        ...(selected?.executable ? { executable: selected.executable } : {}),
         ...(typeof info?.userAgent === 'string' ? { version: info.userAgent } : {}),
         ...(typeof info?.protocolVersion === 'string'
           ? { protocolVersion: info.protocolVersion }
@@ -926,26 +1037,56 @@ function validateRequestedCapabilities(capabilities: readonly string[]): void {
   }
 }
 
-function modelId(row: any): string | undefined {
-  for (const value of [row?.id, row?.model, row?.slug, row?.name]) {
-    if (typeof value === 'string' && value.trim()) return value.trim()
+function validateRuntimeRequirement(
+  requirement: AgentRuntimeRequirement | undefined,
+): void {
+  if (!requirement) return
+  const hasRequirement = Boolean(requirement.model || requirement.reasoningEffort)
+  if (requirement.match === 'inherit' && hasRequirement) {
+    throw new CodexCapabilityError(
+      'UNSUPPORTED',
+      'inherit runtime matching cannot specify a model or reasoning effort',
+    )
   }
-  return undefined
+  if ((requirement.match === 'exact' || requirement.match === 'preferred') && !hasRequirement) {
+    throw new CodexCapabilityError(
+      'UNSUPPORTED',
+      `${requirement.match} runtime matching requires a model or reasoning effort`,
+    )
+  }
 }
 
-function supportedEfforts(row: any): string[] {
-  const values = Array.isArray(row?.supportedReasoningEfforts)
+function catalogModel(row: any): CatalogModel | undefined {
+  const id = firstString(row?.id)
+  const model = firstString(row?.model)
+  const defaultReasoningEffort = firstString(
+    row?.defaultReasoningEffort,
+    row?.default_reasoning_effort,
+  )
+  const rawEfforts = Array.isArray(row?.supportedReasoningEfforts)
     ? row.supportedReasoningEfforts
     : Array.isArray(row?.supported_reasoning_efforts)
       ? row.supported_reasoning_efforts
-      : []
-  return values.flatMap((item: any) => {
-    if (typeof item === 'string') return [item]
-    for (const value of [item?.reasoningEffort, item?.reasoning_effort, item?.effort, item?.value]) {
-      if (typeof value === 'string' && value.trim()) return [value.trim()]
-    }
-    return []
-  })
+      : undefined
+  if (!id || !model || !defaultReasoningEffort || !rawEfforts) return undefined
+  return {
+    id,
+    model,
+    isDefault: row?.isDefault === true || row?.default === true,
+    defaultReasoningEffort,
+    supportedReasoningEfforts: [...new Set<string>(rawEfforts.flatMap(
+      (item: any): string[] => {
+        if (typeof item === 'string' && item.trim()) return [item.trim()]
+        const effort = firstString(
+          item?.reasoningEffort,
+          item?.reasoning_effort,
+          item?.effort,
+          item?.value,
+        )
+        return effort ? [effort] : []
+      },
+    ))],
+  }
 }
 
 function runtimeFromRequirement(
@@ -964,6 +1105,7 @@ function runtimeFromRequirement(
 function runtimeFromHostResponse(
   response: any,
   requirement: AgentRuntimeRequirement | undefined,
+  fallback: ResolvedRuntime,
 ): ResolvedRuntime {
   const model = firstString(response?.model, response?.thread?.model)
   const effort = firstString(
@@ -974,13 +1116,15 @@ function runtimeFromHostResponse(
     response?.thread?.reasoning_effort,
   )
   return {
+    ...fallback,
     ...(requirement?.model ? { requestedModel: requirement.model } : {}),
     ...(requirement?.reasoningEffort
       ? { requestedReasoningEffort: requirement.reasoningEffort }
       : {}),
     ...(model ? { actualModel: model } : {}),
     ...(effort ? { actualReasoningEffort: effort } : {}),
-    verified: Boolean(model || effort || (!requirement?.model && !requirement?.reasoningEffort)),
+    verified: fallback.verified ||
+      Boolean(model || effort || (!requirement?.model && !requirement?.reasoningEffort)),
   }
 }
 
