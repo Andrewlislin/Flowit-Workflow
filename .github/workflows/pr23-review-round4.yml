@@ -25,6 +25,16 @@ jobs:
       - name: Apply reviewed fixes
         shell: bash
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/pr23-round4/fix.py')
+          text = path.read_text()
+          text = text.replace(
+              'updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)',
+              'updated, count = re.subn(pattern, lambda _: replacement, text, count=1, flags=flags)',
+          )
+          path.write_text(text)
+          PY
           python .github/pr23-round4/fix.py
           python - <<'PY'
           from pathlib import Path
@@ -54,7 +64,7 @@ jobs:
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+Andrewlislin@users.noreply.github.com"
           git add -A
           tree=$(git write-tree)
           commit=$(printf '%s\n' 'fix: interrupt exact reroutes and fence deterministic retries' \
