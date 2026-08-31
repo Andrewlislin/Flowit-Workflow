@@ -1,5 +1,8 @@
 import type {
   AdapterId,
+  AgentExecutionCapability,
+  AgentExecutionRequirement,
+  AgentRuntimeRequirement,
   AutomationTarget,
   CalendarDayOfWeek,
   CreatePipelineInput,
@@ -15,6 +18,14 @@ import type {
 import { nonEmpty, normalizeStringList } from './utils.js'
 
 export { nonEmpty, normalizeStringList } from './utils.js'
+
+const EXECUTION_CAPABILITIES = new Set<AgentExecutionCapability>([
+  'workspace-read',
+  'workspace-write',
+  'shell',
+  'network',
+  'browser',
+])
 
 export function adapterIdOf(value: { adapterId?: AdapterId }, defaultAdapterId: AdapterId): AdapterId {
   return nonEmpty(value.adapterId ?? defaultAdapterId, 'adapterId')
@@ -39,9 +50,52 @@ export function normalizeContextRefs(refs: readonly SessionContextRef[] | undefi
   return result
 }
 
+export function normalizeExecutionRequirement(
+  value: AgentExecutionRequirement,
+): AgentExecutionRequirement {
+  const runtime = value.runtime ? normalizeRuntimeRequirement(value.runtime) : undefined
+  const requiredCapabilities = value.requiredCapabilities === undefined
+    ? undefined
+    : [...new Set(value.requiredCapabilities.map((item) => {
+        if (!EXECUTION_CAPABILITIES.has(item)) {
+          throw new Error(`unsupported execution capability: ${String(item)}`)
+        }
+        return item
+      }))]
+  return {
+    ...(runtime ? { runtime } : {}),
+    ...(requiredCapabilities ? { requiredCapabilities } : {}),
+  }
+}
+
+function normalizeRuntimeRequirement(value: AgentRuntimeRequirement): AgentRuntimeRequirement {
+  if (!['inherit', 'exact', 'preferred'].includes(value.match)) {
+    throw new Error('execution.runtime.match must be inherit, exact, or preferred')
+  }
+  const model = value.model?.trim()
+  const reasoningEffort = value.reasoningEffort?.trim()
+  if (value.match === 'exact' && !model && !reasoningEffort) {
+    throw new Error('exact runtime matching requires a model or reasoning effort')
+  }
+  return {
+    match: value.match,
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  }
+}
+
 export function normalizeTarget(target: AutomationTarget, defaultAdapterId: AdapterId): AutomationTarget {
   const adapterId = adapterIdOf(target, defaultAdapterId)
-  return { adapterId, sessionId: nonEmpty(target.sessionId, 'target.sessionId'), prompt: nonEmpty(target.prompt, 'target.prompt'), skills: normalizeStringList(target.skills), contextRefs: normalizeContextRefs(target.contextRefs, defaultAdapterId) }
+  return {
+    adapterId,
+    sessionId: nonEmpty(target.sessionId, 'target.sessionId'),
+    prompt: nonEmpty(target.prompt, 'target.prompt'),
+    skills: normalizeStringList(target.skills),
+    contextRefs: normalizeContextRefs(target.contextRefs, defaultAdapterId),
+    ...(target.execution
+      ? { execution: normalizeExecutionRequirement(target.execution) }
+      : {}),
+  }
 }
 
 export function createScheduleRecord(id: string, input: CreateScheduleInput, now: Date, minimumIntervalSeconds: number, defaultAdapterId: AdapterId): ScheduledTask {
