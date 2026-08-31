@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
-import { AgentExecutionError } from '@coaseedgeltd/flowit-core'
+import { AgentExecutionError, isAgentExecutionError } from '@coaseedgeltd/flowit-core'
 import type {
   AgentAdapter,
   AgentDispatchRequest,
@@ -225,6 +225,7 @@ export class CodexAgentAdapter implements AgentAdapter {
       this.sessionExecutables.set(existingSessionId, selected.executable)
       return { status: 'ready', evidence, blockers: [] }
     } catch (error: unknown) {
+      signal?.throwIfAborted()
       const classified = classifyError(error)
       return blocked(
         this.executionEvidence(
@@ -555,7 +556,7 @@ export class CodexAgentAdapter implements AgentAdapter {
     preferredExecutable?: string,
   ): Promise<SelectedCodexClient> {
     validateRuntimeRequirement(runtimeRequirement)
-    const errors: Error[] = []
+    const errors: CodexCapabilityError[] = []
     const inspect = runtimeRequirement?.match === 'exact' ||
       runtimeRequirement?.match === 'preferred'
 
@@ -568,22 +569,39 @@ export class CodexAgentAdapter implements AgentAdapter {
         this.defaultExecutable ??= executable
         return { client, executable, runtime }
       } catch (error: unknown) {
-        errors.push(error instanceof Error ? error : new Error(String(error)))
+        signal?.throwIfAborted()
+        errors.push(classifyError(error))
       }
     }
 
-    const capabilityErrors = errors.filter(
-      (error): error is CodexCapabilityError => error instanceof CodexCapabilityError,
-    )
-    const runtimeError =
-      capabilityErrors.find(error => error.code === 'REASONING_EFFORT_UNAVAILABLE') ??
-      capabilityErrors.find(error => error.code === 'MODEL_UNAVAILABLE')
-    if (runtimeError) throw runtimeError
-    if (errors.length === 1) throw errors[0]
     const details = errors.map(error => error.message).filter(Boolean).join('; ')
-    throw new AggregateError(
-      errors,
+    if (errors.some(error => error.retryable)) {
+      throw new CodexCapabilityError(
+        'HOST_UNAVAILABLE',
+        `no Codex executable is currently available${details ? `: ${details}` : ''}`,
+        true,
+      )
+    }
+    const runtimeError =
+      errors.find(error => error.code === 'REASONING_EFFORT_UNAVAILABLE') ??
+      errors.find(error => error.code === 'MODEL_UNAVAILABLE')
+    if (runtimeError) throw runtimeError
+    const deterministic =
+      errors.find(error => error.code === 'HOST_VERSION_INCOMPATIBLE') ??
+      errors.find(error => error.code === 'EXECUTABLE_UNAVAILABLE') ??
+      errors[0]
+    if (!deterministic) {
+      throw new CodexCapabilityError(
+        'HOST_UNAVAILABLE',
+        'no Codex executable candidate was available',
+        true,
+      )
+    }
+    if (errors.length === 1) throw deterministic
+    throw new CodexCapabilityError(
+      deterministic.code,
       `no compatible Codex executable could start${details ? `: ${details}` : ''}`,
+      false,
     )
   }
 
@@ -650,14 +668,23 @@ export class CodexAgentAdapter implements AgentAdapter {
     const seenCursors = new Set<string>()
     let cursor: string | undefined
     for (let page = 0; page < 1_000; page += 1) {
-      const result = (await client.request(
-        'thread/list',
-        {
-          limit: 200,
-          ...(cursor ? { cursor } : {}),
-        },
-        signal,
-      )) as any
+      let result: any
+      try {
+        result = await client.request(
+          'thread/list',
+          {
+            limit: 200,
+            ...(cursor ? { cursor } : {}),
+          },
+          signal,
+        )
+      } catch (error: unknown) {
+        signal?.throwIfAborted()
+        throw contextualizeCodexError(
+          error,
+          'Codex app-server cannot enumerate Sessions',
+        )
+      }
       const pageRows = Array.isArray(result?.data) ? result.data : []
       rows.push(...pageRows)
       const nextCursor = firstString(result?.nextCursor, result?.next_cursor)
@@ -744,9 +771,10 @@ export class CodexAgentAdapter implements AgentAdapter {
           signal,
         )
       } catch (error: unknown) {
-        throw new CodexCapabilityError(
-          'HOST_VERSION_INCOMPATIBLE',
-          `Codex app-server ${executable} cannot enumerate models required for runtime preflight: ${error instanceof Error ? error.message : String(error)}`,
+        signal?.throwIfAborted()
+        throw contextualizeCodexError(
+          error,
+          `Codex app-server ${executable} cannot enumerate models required for runtime preflight`,
         )
       }
       const pageRows = Array.isArray(result?.data)
@@ -826,11 +854,20 @@ export class CodexAgentAdapter implements AgentAdapter {
     signal?: AbortSignal,
   ): Promise<Array<{ name: string; path: string }>> {
     if (!names.length) return []
-    const result = (await client.request(
-      'skills/list',
-      { cwds: [cwd], forceReload: true },
-      signal,
-    )) as any
+    let result: any
+    try {
+      result = await client.request(
+        'skills/list',
+        { cwds: [cwd], forceReload: true },
+        signal,
+      )
+    } catch (error: unknown) {
+      signal?.throwIfAborted()
+      throw contextualizeCodexError(
+        error,
+        `Codex app-server cannot enumerate Skills for ${cwd}`,
+      )
+    }
     const groups = Array.isArray(result?.data) ? result.data : []
     const rows = groups.flatMap((group: any) => (Array.isArray(group?.skills) ? group.skills : []))
     return [...new Set(names)].map(name => {
@@ -1187,14 +1224,65 @@ function blocked(
 
 function classifyError(error: unknown): CodexCapabilityError {
   if (error instanceof CodexCapabilityError) return error
+  if (isAgentExecutionError(error)) {
+    return new CodexCapabilityError(error.code, error.message, error.retryable)
+  }
+  if (error instanceof AggregateError) {
+    const errors = [...error.errors].map(item => classifyError(item))
+    const details = errors.map(item => item.message).filter(Boolean).join('; ')
+    if (errors.some(item => item.retryable)) {
+      return new CodexCapabilityError(
+        'HOST_UNAVAILABLE',
+        error.message || details || 'Codex Host is temporarily unavailable',
+        true,
+      )
+    }
+    const deterministic =
+      errors.find(item => item.code === 'REASONING_EFFORT_UNAVAILABLE') ??
+      errors.find(item => item.code === 'MODEL_UNAVAILABLE') ??
+      errors.find(item => item.code === 'HOST_VERSION_INCOMPATIBLE') ??
+      errors.find(item => item.code === 'EXECUTABLE_UNAVAILABLE') ??
+      errors[0]
+    if (deterministic) {
+      return new CodexCapabilityError(
+        deterministic.code,
+        error.message || details || deterministic.message,
+        false,
+      )
+    }
+  }
   const message = error instanceof Error ? error.message : String(error)
+  const code =
+    error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : undefined
   if (/active writer|already.*writer|writer.*locked/i.test(message)) {
     return new CodexCapabilityError('SESSION_WRITER_LOCKED', message, true)
   }
-  if (/ENOENT|spawn|not found/i.test(message)) {
-    return new CodexCapabilityError('EXECUTABLE_UNAVAILABLE', message)
+  if (
+    code === 'ENOENT' ||
+    /\bENOENT\b|spawn [^\n]+(?:not found|ENOENT)|command not found|executable [^\n]+ not found/i.test(message)
+  ) {
+    return new CodexCapabilityError('EXECUTABLE_UNAVAILABLE', message, false)
   }
-  return new CodexCapabilityError('HOST_VERSION_INCOMPATIBLE', message)
+  if (
+    /\bmethod\b.*\b(?:not found|unknown|unsupported)\b|\bunsupported\b.*\b(?:method|request|protocol)\b|\binvalid params\b|\bprotocol\b.*\b(?:mismatch|incompatible|unsupported)\b|\bJSON-RPC\b.*\b(?:invalid|unsupported)\b/i.test(message)
+  ) {
+    return new CodexCapabilityError('HOST_VERSION_INCOMPATIBLE', message, false)
+  }
+  return new CodexCapabilityError('HOST_UNAVAILABLE', message, true)
+}
+
+function contextualizeCodexError(
+  error: unknown,
+  context: string,
+): CodexCapabilityError {
+  const classified = classifyError(error)
+  return new CodexCapabilityError(
+    classified.code,
+    `${context}: ${classified.message}`,
+    classified.retryable,
+  )
 }
 
 function validateRequestedCapabilities(capabilities: readonly string[]): void {

@@ -20,6 +20,7 @@ class ContractAdapter implements AgentAdapter {
   readonly dispatches: AgentDispatchRequest[] = []
   readonly preflights: AgentExecutionPreflightRequest[] = []
   dispatchError: Error | undefined
+  transientPreflightFailures = 0
   preflightMode:
     | 'ready'
     | 'blocked'
@@ -47,6 +48,26 @@ class ContractAdapter implements AgentAdapter {
     request: AgentExecutionPreflightRequest,
   ): Promise<AgentExecutionPreflightResult> {
     this.preflights.push(structuredClone(request))
+    if (this.transientPreflightFailures > 0) {
+      this.transientPreflightFailures -= 1
+      return {
+        status: 'blocked',
+        blockers: [{
+          code: 'HOST_UNAVAILABLE',
+          message: 'temporary Host timeout',
+          retryable: true,
+        }],
+        evidence: {
+          runtime: { verified: false },
+          session: {
+            strategy: request.session.kind,
+            ...(request.session.kind === 'existing'
+              ? { sessionId: request.session.sessionId }
+              : {}),
+          },
+        },
+      }
+    }
     const verified = this.preflightMode !== 'unverified'
     const requestedModel = request.requirement.runtime?.model
     const actualModel = this.preflightMode === 'wrong-model'
@@ -275,6 +296,64 @@ test('run-once execution-contract failures dead-letter on the first attempt', as
     )
     const status = await core.runOncePipelines.getRun(admitted.runId!)
     assert.equal(status?.attempt, 1)
+    assert.equal(adapter.dispatches.length, 1)
+  } finally {
+    await core.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('run-once retryable preflight failure retries and completes on attempt two', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-core-execution-retryable-'))
+  const adapter = new ContractAdapter('retryable-execution-adapter', true)
+  adapter.transientPreflightFailures = 1
+  const definitionId = 'retryable-execution-run-once'
+  const triggerKey = 'retryable-execution-trigger'
+  const core = new FlowitOrchestrationCore({
+    storageFile: path.join(root, 'workflow.json'),
+    defaultAdapterId: adapter.id,
+    activeWorkers: true,
+    leaseDurationMs: 1_000,
+    retryDelayMs: 250,
+    maxPipelineAttempts: 3,
+  }, [adapter])
+  try {
+    await core.ready
+    const admitted = await core.runOncePipelines.startRunOnce({
+      definitionId,
+      triggerKey,
+      snapshot: {
+        version: 1,
+        name: 'retryable execution run-once',
+        nodes: [{
+          id: 'work',
+          target: target(adapter.id),
+          inheritUpstreamContext: false,
+        }],
+        edges: [],
+      },
+    })
+    assert.equal(admitted.status, 'accepted')
+    assert.ok(admitted.runId)
+
+    await waitUntil(async () =>
+      (await core.runOncePipelines.getRun(admitted.runId!))?.status === 'retrying',
+    )
+    const retrying = await core.runOncePipelines.getRun(admitted.runId!)
+    assert.equal(retrying?.attempt, 1)
+    const afterFirstAttempt = await core.store.snapshot()
+    assert.equal(afterFirstAttempt.terminalReceipts.some(receipt =>
+      receipt.kind === 'pipeline' &&
+      receipt.definitionId === definitionId &&
+      receipt.triggerKey === triggerKey,
+    ), false)
+
+    await waitUntil(async () =>
+      (await core.runOncePipelines.getRun(admitted.runId!))?.status === 'completed',
+    5_000)
+    const completed = await core.runOncePipelines.getRun(admitted.runId!)
+    assert.equal(completed?.attempt, 2)
+    assert.equal(adapter.preflights.length, 2)
     assert.equal(adapter.dispatches.length, 1)
   } finally {
     await core.dispose()

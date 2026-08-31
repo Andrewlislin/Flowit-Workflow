@@ -29,3 +29,4 @@ Follow-up hardening adds a Workflow State v2 mixed-version fence, a durable prov
 - Model and Session discovery follow `nextCursor` pagination and Core independently checks exact/preferred actual evidence.
 - Exact-model reroutes immediately request `turn/interrupt` and surface a non-retryable execution-contract error; preferred reroutes update final evidence.
 - Durable runtimes dead-letter non-retryable execution-contract failures on the first attempt.
+- Transient Codex preflight timeouts, disconnects and App Server exits surface as retryable `HOST_UNAVAILABLE`; a later healthy attempt can complete without a premature terminal receipt.

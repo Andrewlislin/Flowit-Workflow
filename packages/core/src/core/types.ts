@@ -50,6 +50,7 @@ export interface AgentExecutionPreflightRequest {
 export type AgentExecutionBlockerCode =
   | 'EXECUTABLE_UNAVAILABLE'
   | 'HOST_VERSION_INCOMPATIBLE'
+  | 'HOST_UNAVAILABLE'
   | 'MODEL_UNAVAILABLE'
   | 'REASONING_EFFORT_UNAVAILABLE'
   | 'SESSION_NOT_FOUND'

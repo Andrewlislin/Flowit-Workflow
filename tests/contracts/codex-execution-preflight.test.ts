@@ -525,6 +525,68 @@ test('Codex Session discovery exhausts paginated thread catalogs', async () => {
   }
 })
 
+async function transientModelListCodex(root: string): Promise<string> {
+  const executable = path.join(root, 'codex-transient-model-list')
+  const rows = [model('picker-transient', 'transient-model', ['high'], true, 'high')]
+  const source = `#!/usr/bin/env node
+const readline = require('node:readline');
+const models = ${JSON.stringify(rows)};
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = value => process.stdout.write(JSON.stringify(value) + String.fromCharCode(10));
+let modelListCalls = 0;
+rl.on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialized') return;
+  if (msg.id === undefined || msg.id === null) return;
+  if (msg.method === 'initialize') return send({id:msg.id,result:{userAgent:'transient-model-list'}});
+  if (msg.method === 'model/list') {
+    modelListCalls += 1;
+    if (modelListCalls === 1) return;
+    return send({id:msg.id,result:{data:models,nextCursor:null}});
+  }
+});
+`
+  await writeFile(executable, source, 'utf8')
+  await chmod(executable, 0o755)
+  return executable
+}
+
+test('Codex transient model-list timeout remains retryable and later preflight succeeds', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-transient-model-list-'))
+  const adapter = new CodexAgentAdapter({
+    executable: await transientModelListCodex(root),
+    requestTimeoutMs: 50,
+  })
+  const request = {
+    correlationId: 'transient-model-list',
+    session: { kind: 'dedicated' as const, cwd: root },
+    requirement: {
+      runtime: {
+        model: 'transient-model',
+        reasoningEffort: 'high',
+        match: 'exact' as const,
+      },
+    },
+    skills: [],
+  }
+  try {
+    const first = await adapter.preflightExecution(request)
+    assert.equal(first.status, 'blocked')
+    assert.equal(first.blockers[0]?.code, 'HOST_UNAVAILABLE')
+    assert.equal(first.blockers[0]?.retryable, true)
+    assert.match(first.blockers[0]?.message ?? '', /model\/list.*timed out/i)
+
+    const second = await adapter.preflightExecution(request)
+    assert.equal(second.status, 'ready')
+    assert.equal(second.blockers.length, 0)
+    assert.equal(second.evidence.runtime?.actualModel, 'transient-model')
+    assert.equal(second.evidence.runtime?.actualReasoningEffort, 'high')
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('Codex capability requirements fail closed without permission evidence', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-permissions-'))
   const fake = await executionAwareCodex(root)
