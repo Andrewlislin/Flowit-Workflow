@@ -753,10 +753,10 @@ rl.on('line', line => {
   return { executable, marker }
 }
 """
-replace_once(
+regex_replace_once(
     'tests/contracts/codex-execution-preflight.test.ts',
-    old_reroute_fixture,
-    new_reroute_fixture,
+    r"async function reroutingCodex\(root: string\): Promise<string> \{[\s\S]*?\n\}\n\ntest\('model/rerouted violates exact execution and updates preferred evidence'",
+    new_reroute_fixture + "\ntest('model/rerouted violates exact execution and updates preferred evidence'",
 )
 
 replace_once(
