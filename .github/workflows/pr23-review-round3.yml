@@ -3,7 +3,7 @@ name: PR23 Review Round 3
 on:
   push:
     branches:
-      - pr23-review-round3-staging
+      - pr23-review-round3-ready
 
 permissions:
   contents: write
@@ -25,7 +25,9 @@ jobs:
       - name: Apply reviewed fixes
         shell: bash
         run: |
-          base64 --decode .github/pr23-round3/fix.py.gz.b64 \
+          cat .github/pr23-round3/fix.b64.* \
+            | tr -d '\n\r' \
+            | base64 --decode \
             | gzip --decompress > /tmp/pr23-round3-fix.py
           python /tmp/pr23-round3-fix.py
           rm -rf .github/pr23-round3 .github/workflows/pr23-review-round3.yml
@@ -38,7 +40,7 @@ jobs:
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+Andrewlislin@users.noreply.github.com"
           git add -A
           tree=$(git write-tree)
           commit=$(printf '%s\n' 'fix: validate final Codex runtime evidence and reroutes' \
