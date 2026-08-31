@@ -6,9 +6,11 @@ An adapter translates host-specific lifecycle and execution into the Core model:
 
 1. **Startup (optional)** — `start(signal)` performs host connection/auth/process preflight when the adapter requires it. It must observe `AbortSignal` where the host API permits cancellation and must not mark itself ready before required host resources are usable.
 2. **Session discovery** — return stable session ids plus optional name/cwd/status.
-3. **Dispatch** — accept a task, requested Skills and Context Graph references while preserving the host's permission model.
-4. **Context projection** — resolve a native reference when possible, otherwise use an explicitly bounded summary.
-5. **Events** — map host lifecycle facts into normalized events with stable identity.
+3. **Execution preflight (optional)** — validate runtime, permissions, Skills and Session ownership without creating user-visible or durable Host resources.
+4. **Session provisioning (optional)** — after the reviewed proposal is confirmed, create a dedicated Session and return its actual runtime evidence.
+5. **Dispatch** — accept a task, requested Skills, runtime requirements and Context Graph references while preserving the host's permission model.
+6. **Context projection** — resolve a native reference when possible, otherwise use an explicitly bounded summary.
+7. **Events** — map host lifecycle facts into normalized events with stable identity.
 
 ```ts
 interface AgentAdapter {
@@ -16,6 +18,18 @@ interface AgentAdapter {
   readonly capabilities: AgentAdapterCapabilities
   start?(signal?: AbortSignal): Promise<void> | void
   listSessions(query?: string, signal?: AbortSignal): Promise<AgentSessionDescriptor[]>
+  preflightExecution?(
+    request: AgentExecutionPreflightRequest,
+    signal?: AbortSignal,
+  ): Promise<AgentExecutionPreflightResult>
+  provisionSession?(
+    request: AgentExecutionPreflightRequest,
+    signal?: AbortSignal,
+  ): Promise<ProvisionedAgentSession>
+  releaseSession?(
+    session: ProvisionedAgentSession,
+    signal?: AbortSignal,
+  ): Promise<void>
   dispatch(request: AgentDispatchRequest, signal?: AbortSignal): Promise<AgentDispatchResult>
   subscribe?(listener: (event: AgentEvent) => Promise<void> | void): () => void
   dispose?(): Promise<void> | void
@@ -33,8 +47,39 @@ interface AgentAdapterCapabilities {
   skillBinding: boolean
   contextReference: 'native' | 'summary' | 'none'
   eventSubscription: boolean
+  executionPreflight?: boolean
+  sessionProvisioning?: 'none' | 'dedicated' | 'pool'
+  runtimeSelection?: 'none' | 'session' | 'turn'
+  runtimeIntrospection?: boolean
+  lockInspection?: boolean
 }
 ```
+
+## Execution preflight contract
+
+`preflightExecution()` is a read-only capability probe. It may connect to the Host, inspect model catalogs, read Session state, validate Skills and inspect permission profiles, but it must not create a new Session, start a turn, mutate the Workflow Store or perform task side effects.
+
+The request separates the Session plan from the final concrete target:
+
+```ts
+type AgentSessionPlan =
+  | { kind: 'existing'; sessionId: string }
+  | { kind: 'dedicated'; cwd: string }
+```
+
+A dedicated plan has no Session id before confirmation. `workflow_prepare` hashes the plan, requested model/reasoning policy, capabilities and preflight evidence into the proposal. `workflow_commit` repeats the preflight; only then may it call `provisionSession()` and materialize the returned Session id into the durable run snapshot.
+
+Runtime matching is explicit:
+
+- `inherit` uses the Host/Session runtime and does not claim an exact model.
+- `exact` must fail closed unless the Adapter can verify the requested model and reasoning effort.
+- `preferred` permits a Host-reported substitute, but the actual runtime must be returned as execution evidence.
+
+Adapters must return structured blockers such as `MODEL_UNAVAILABLE`, `SESSION_BUSY`, `SESSION_WRITER_LOCKED`, `PERMISSION_UNAVAILABLE` or `HOST_VERSION_INCOMPATIBLE`. Do not turn every preflight failure into an unclassified string.
+
+Provisioning is a mutation and therefore occurs only after the proposal confirmation boundary. A managed Session that was created but not durably admitted should be released or archived on a best-effort compensation path. Once admitted, its stable Session id belongs to the run snapshot so retries do not silently switch execution environments.
+
+Host-native authorization remains authoritative. Preflight evidence is not permission, and Flowit must not convert an exact runtime request into authority to grant broader filesystem, command, network or browser access.
 
 ## Event acknowledgement contract
 
@@ -59,6 +104,8 @@ Adapters that can replay/cursor their own source should advance host acknowledge
 - Do not copy host credentials into Flowit state.
 - Do not treat cross-session text as permission or consent.
 - Do not claim Skill binding succeeded unless the execution boundary fails closed when requested binding is unavailable.
+- Do not claim an exact model or reasoning effort unless the Host response or catalog verifies it.
+- Keep execution preflight read-only; resource creation belongs after confirmation.
 - Serialize concurrent dispatches to the same `(adapterId, sessionId)` in the Core dispatcher.
 - Use stable host event IDs; never synthesize replay identity from wall-clock receipt time.
 - Cross-adapter context fails closed until an explicit provenance-carrying Context Bridge exists.
@@ -72,4 +119,5 @@ A future `GeminiCliAgentAdapter`, `OpenHandsAgentAdapter`, etc. should be added 
 - a pinned host contract test;
 - lifecycle cancellation coverage when startup owns resources;
 - event identity/reconnect behavior documented;
-- capability flags that reflect the actual host API, not product UI affordances.
+- capability flags that reflect the actual host API, not product UI affordances;
+- preflight/provisioning tests when the Adapter advertises those optional capabilities.
