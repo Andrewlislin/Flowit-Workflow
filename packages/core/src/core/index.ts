@@ -1,6 +1,7 @@
 export * from './types.js'
 export * from './utils.js'
 export * from './domain.js'
+export * from './execution-error.js'
 export * from './adapter.js'
 export * from './context-graph.js'
 export * from './skill-binding.js'

@@ -140,6 +140,12 @@ export function validateMvpProposal(proposal: PreparedWorkflowProposal): void {
     if (!sameStrings(node.target.skills, proposal.binding.skills)) {
       throw new Error('adaptive Pipeline node Skills differ from the preflighted binding')
     }
+    if (
+      canonicalJson(node.target.execution ?? null) !==
+      canonicalJson(proposal.binding.execution ?? null)
+    ) {
+      throw new Error('adaptive Pipeline node execution requirement differs from the binding')
+    }
     if (node.target.contextRefs.length !== 0) {
       throw new Error('adaptive routing MVP does not accept caller-supplied context references')
     }
@@ -196,6 +202,9 @@ function renderPipeline(
       prompt: nodePrompt(task, role, index, roles.length),
       skills: [...binding.skills],
       contextRefs: [],
+      ...(binding.execution
+        ? { execution: structuredClone(binding.execution) }
+        : {}),
     },
     inheritUpstreamContext: index > 0,
   }))
@@ -217,7 +226,12 @@ function selectRoles(
   const desired = Math.min(maxNodes, desiredNodeCount(assessment))
   const catalog = roleCatalog(assessment.signals.taskKind)
   if (desired >= catalog.length) return catalog
-  if (desired === 2) return [catalog[0]!, catalog.at(-1)!]
+  if (desired === 2) {
+    if (assessment.signals.taskKind === 'coding') {
+      return [catalog.at(-2)!, catalog.at(-1)!]
+    }
+    return [catalog[0]!, catalog.at(-1)!]
+  }
   if (desired === 3) return [catalog[0]!, catalog.at(-2)!, catalog.at(-1)!]
   return catalog.slice(0, desired - 1).concat(catalog.at(-1)!)
 }
@@ -296,7 +310,8 @@ function generatedPipelineName(
     taskKind,
     roles: roles.map(role => role.id),
     adapterId: binding.adapterId,
-    sessionId: binding.sessionId,
+    sessionPlan: binding.sessionPlan,
+    execution: binding.execution,
   }).slice(0, 12)
   const summary = task.replace(/\s+/g, ' ').trim().slice(0, 48)
   return `Flowit one-shot: ${summary}${task.length > 48 ? '…' : ''} [${identity}]`
@@ -306,11 +321,20 @@ function proposalWarnings(
   assessment: TaskAssessmentResult,
   binding: ResolvedWorkflowBinding,
 ): readonly string[] {
+  const targetDescription = binding.sessionPlan.kind === 'dedicated'
+    ? `A dedicated ${binding.adapterId} Session will be created in ${binding.sessionPlan.cwd} only after confirmation.`
+    : `The exact binding ${binding.adapterId}:${binding.sessionPlan.sessionId} will be revalidated before durable admission.`
   const warnings = [
     'This is an expiring, manual, run-once Pipeline snapshot; it is not installed as a permanent PipelineDefinition.',
     'The run remains at-least-once. External side effects still require host-native idempotency or transactions.',
-    `The exact binding ${binding.adapterId}:${binding.sessionId} will be revalidated before durable admission.`,
+    targetDescription,
   ]
+  if (binding.execution?.runtime) {
+    const runtime = binding.execution.runtime
+    warnings.push(
+      `Runtime policy is ${runtime.match}; requested model=${runtime.model ?? 'inherit'}, reasoning=${runtime.reasoningEffort ?? 'inherit'}.`,
+    )
+  }
   if (!assessment.authorityTrusted) {
     warnings.push('No host-issued top-level authority was supplied; automatic execution is disabled and explicit confirmation is required.')
   }

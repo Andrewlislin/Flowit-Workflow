@@ -325,7 +325,7 @@ test('legacy automatic terminal runs backfill receipts before run-history prunin
     await import('node:fs/promises').then(fs =>
       fs.writeFile(
         file,
-        `${JSON.stringify({ version: 1, schedules: [], pipelines: [], eventInbox: [], terminalReceipts: [], runs: [{ id: 'legacy-run', kind: 'pipeline', definitionId: 'p', triggerKey: 'agent:test:s:turn_completed:e', status: 'completed', attempt: 1, startedAt: at, updatedAt: at, completedAt: at }] }, null, 2)}\n`,
+        `${JSON.stringify({ version: 1, schedules: [], pipelines: [], eventInbox: [], terminalReceipts: [], provisioningIntents: [], runs: [{ id: 'legacy-run', kind: 'pipeline', definitionId: 'p', triggerKey: 'agent:test:s:turn_completed:e', status: 'completed', attempt: 1, startedAt: at, updatedAt: at, completedAt: at }] }, null, 2)}\n`,
         'utf8',
       ),
     )

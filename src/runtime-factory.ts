@@ -131,8 +131,14 @@ export function createBuiltInAdapter(id: BuiltInAdapterId, consumerId?: string):
         throw new Error('FLOWIT_WORKFLOW_OPENCODE_URL is required for the OpenCode adapter')
       return new OpenCodeAgentAdapter({ baseUrl })
     }
-    case CODEX_ADAPTER_ID:
-      return new CodexAgentAdapter({ executable: process.env.FLOWIT_WORKFLOW_CODEX_BIN ?? 'codex' })
+    case CODEX_ADAPTER_ID: {
+      const executable = process.env.FLOWIT_WORKFLOW_CODEX_BIN
+      const executableCandidates = envCodexBins()
+      return new CodexAgentAdapter({
+        ...(executable ? { executable } : {}),
+        ...(executableCandidates ? { executableCandidates } : {}),
+      })
+    }
     case WORKBUDDY_ADAPTER_ID: {
       const dispatchCommand = parseCommand(process.env.FLOWIT_WORKFLOW_WORKBUDDY_DRIVER)
       return new WorkBuddyAgentAdapter({
@@ -179,6 +185,15 @@ function envAdapters(): BuiltInAdapterId[] | undefined {
   return value
     .split(',')
     .map(item => requireBuiltInAdapterId(item.trim(), 'FLOWIT_WORKFLOW_ADAPTERS'))
+}
+function envCodexBins(): string[] | undefined {
+  const value = process.env.FLOWIT_WORKFLOW_CODEX_BINS
+  if (!value?.trim()) return undefined
+  const rows = value
+    .split(path.delimiter)
+    .map(item => item.trim())
+    .filter(Boolean)
+  return rows.length ? rows : undefined
 }
 function envLegacyStorageFiles(): string[] | undefined {
   const value = process.env.FLOWIT_WORKFLOW_LEGACY_STORAGE_FILES

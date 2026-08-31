@@ -1,5 +1,9 @@
 import type {
   AdapterId,
+  AgentExecutionCapability,
+  AgentExecutionPreflightResult,
+  AgentExecutionRequirement,
+  AgentRuntimeRequirement,
   AutomationTarget,
   CalendarDayOfWeek,
   CreatePipelineInput,
@@ -12,9 +16,18 @@ import type {
   ScheduleTiming,
   SessionContextRef,
 } from './types.js'
+import { AgentExecutionError } from './execution-error.js'
 import { nonEmpty, normalizeStringList } from './utils.js'
 
 export { nonEmpty, normalizeStringList } from './utils.js'
+
+const EXECUTION_CAPABILITIES = new Set<AgentExecutionCapability>([
+  'workspace-read',
+  'workspace-write',
+  'shell',
+  'network',
+  'browser',
+])
 
 export function adapterIdOf(value: { adapterId?: AdapterId }, defaultAdapterId: AdapterId): AdapterId {
   return nonEmpty(value.adapterId ?? defaultAdapterId, 'adapterId')
@@ -39,9 +52,131 @@ export function normalizeContextRefs(refs: readonly SessionContextRef[] | undefi
   return result
 }
 
+export function normalizeExecutionRequirement(
+  value: AgentExecutionRequirement,
+): AgentExecutionRequirement {
+  const runtime = value.runtime ? normalizeRuntimeRequirement(value.runtime) : undefined
+  const requiredCapabilities = value.requiredCapabilities === undefined
+    ? undefined
+    : [...new Set(value.requiredCapabilities.map((item) => {
+        if (!EXECUTION_CAPABILITIES.has(item)) {
+          throw new Error(`unsupported execution capability: ${String(item)}`)
+        }
+        return item
+      }))]
+  return {
+    ...(runtime ? { runtime } : {}),
+    ...(requiredCapabilities ? { requiredCapabilities } : {}),
+  }
+}
+
+export function requiresExecutionPreflight(
+  value: AgentExecutionRequirement | undefined,
+): boolean {
+  if (!value) return false
+  if ((value.requiredCapabilities?.length ?? 0) > 0) return true
+  return value.runtime?.match === 'exact' || value.runtime?.match === 'preferred'
+}
+
+export function assertExecutionPreflightReady(
+  adapterId: AdapterId,
+  requirement: AgentExecutionRequirement | undefined,
+  result: AgentExecutionPreflightResult,
+): void {
+  if (result.status !== 'ready' || result.blockers.length > 0) {
+    const details = result.blockers.length
+      ? result.blockers.map(item => `${item.code}: ${item.message}`).join('; ')
+      : `status=${result.status}`
+    const blocker =
+      result.blockers.find(item => item.retryable === false) ??
+      result.blockers[0]
+    throw new AgentExecutionError(
+      blocker?.code ?? 'UNSUPPORTED',
+      `Adapter ${adapterId} execution preflight blocked: ${details}`,
+      blocker?.retryable ?? false,
+    )
+  }
+  const requested = requirement?.runtime
+  if (requested?.match !== 'exact' && requested?.match !== 'preferred') return
+  const actual = result.evidence.runtime
+  if (actual?.verified !== true) {
+    throw new AgentExecutionError(
+      'HOST_VERSION_INCOMPATIBLE',
+      `Adapter ${adapterId} execution preflight returned ready without verified runtime evidence`,
+      false,
+    )
+  }
+  if (requested.model) {
+    if (!actual.actualModel) {
+      throw new AgentExecutionError(
+        'MODEL_UNAVAILABLE',
+        `Adapter ${adapterId} execution preflight did not report an actual model for ${requested.match} model ${requested.model}`,
+        false,
+      )
+    }
+    if (requested.match === 'exact' && actual.actualModel !== requested.model) {
+      throw new AgentExecutionError(
+        'MODEL_UNAVAILABLE',
+        `Adapter ${adapterId} execution preflight reported actual model ${actual.actualModel} instead of exact model ${requested.model}`,
+        false,
+      )
+    }
+  }
+  if (requested.reasoningEffort) {
+    if (!actual.actualReasoningEffort) {
+      throw new AgentExecutionError(
+        'REASONING_EFFORT_UNAVAILABLE',
+        `Adapter ${adapterId} execution preflight did not report an actual reasoning effort for ${requested.match} effort ${requested.reasoningEffort}`,
+        false,
+      )
+    }
+    if (
+      requested.match === 'exact' &&
+      actual.actualReasoningEffort !== requested.reasoningEffort
+    ) {
+      throw new AgentExecutionError(
+        'REASONING_EFFORT_UNAVAILABLE',
+        `Adapter ${adapterId} execution preflight reported actual reasoning effort ${actual.actualReasoningEffort} instead of exact effort ${requested.reasoningEffort}`,
+        false,
+      )
+    }
+  }
+}
+
+function normalizeRuntimeRequirement(value: AgentRuntimeRequirement): AgentRuntimeRequirement {
+  if (!['inherit', 'exact', 'preferred'].includes(value.match)) {
+    throw new Error('execution.runtime.match must be inherit, exact, or preferred')
+  }
+  const model = value.model?.trim()
+  const reasoningEffort = value.reasoningEffort?.trim()
+  if (value.match === 'inherit' && (model || reasoningEffort)) {
+    throw new Error('inherit runtime matching cannot specify a model or reasoning effort')
+  }
+  if (value.match === 'exact' && !model && !reasoningEffort) {
+    throw new Error('exact runtime matching requires a model or reasoning effort')
+  }
+  if (value.match === 'preferred' && !model && !reasoningEffort) {
+    throw new Error('preferred runtime matching requires a model or reasoning effort')
+  }
+  return {
+    match: value.match,
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  }
+}
+
 export function normalizeTarget(target: AutomationTarget, defaultAdapterId: AdapterId): AutomationTarget {
   const adapterId = adapterIdOf(target, defaultAdapterId)
-  return { adapterId, sessionId: nonEmpty(target.sessionId, 'target.sessionId'), prompt: nonEmpty(target.prompt, 'target.prompt'), skills: normalizeStringList(target.skills), contextRefs: normalizeContextRefs(target.contextRefs, defaultAdapterId) }
+  return {
+    adapterId,
+    sessionId: nonEmpty(target.sessionId, 'target.sessionId'),
+    prompt: nonEmpty(target.prompt, 'target.prompt'),
+    skills: normalizeStringList(target.skills),
+    contextRefs: normalizeContextRefs(target.contextRefs, defaultAdapterId),
+    ...(target.execution
+      ? { execution: normalizeExecutionRequirement(target.execution) }
+      : {}),
+  }
 }
 
 export function createScheduleRecord(id: string, input: CreateScheduleInput, now: Date, minimumIntervalSeconds: number, defaultAdapterId: AdapterId): ScheduledTask {

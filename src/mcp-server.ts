@@ -3,7 +3,12 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { executeControl } from './control.js'
-import type { AutomationTarget, CreatePipelineInput, CreateScheduleInput } from './core/types.js'
+import type {
+  AgentExecutionRequirement,
+  AutomationTarget,
+  CreatePipelineInput,
+  CreateScheduleInput,
+} from './core/types.js'
 import { createConfiguredRuntime, requireBuiltInAdapterId } from './runtime-factory.js'
 import {
   commitPreparedWorkflow,
@@ -226,9 +231,17 @@ function assessmentInput(args: Record<string, unknown>): TaskAssessmentRequest {
 
 function prepareInput(args: Record<string, unknown>): PrepareWorkflowInput {
   const rawTarget = object(args.target, 'target')
+  const sessionId = optional(rawTarget.sessionId)
+  const dedicatedCwd = optional(rawTarget.dedicatedCwd)
+  if (Boolean(sessionId) === Boolean(dedicatedCwd)) {
+    throw new Error('target must specify exactly one of sessionId or dedicatedCwd')
+  }
+  const execution = parseExecutionRequirement(rawTarget.execution)
   const target: WorkflowTargetBinding = {
     adapterId: string(rawTarget.adapterId, 'target.adapterId'),
-    sessionId: string(rawTarget.sessionId, 'target.sessionId'),
+    ...(sessionId ? { sessionId } : {}),
+    ...(dedicatedCwd ? { dedicatedCwd } : {}),
+    ...(execution ? { execution } : {}),
     ...(rawTarget.skills === undefined
       ? {}
       : { skills: stringArray(rawTarget.skills, 'target.skills') }),
@@ -240,6 +253,35 @@ function prepareInput(args: Record<string, unknown>): PrepareWorkflowInput {
     target,
     ...(maxNodes === undefined ? {} : { maxNodes }),
     ...(pipelineName ? { pipelineName } : {}),
+  }
+}
+
+function parseExecutionRequirement(value: unknown): AgentExecutionRequirement | undefined {
+  if (value === undefined) return undefined
+  const raw = object(value, 'target.execution')
+  const runtimeRaw = raw.runtime === undefined
+    ? undefined
+    : object(raw.runtime, 'target.execution.runtime')
+  let runtime: AgentExecutionRequirement['runtime']
+  if (runtimeRaw) {
+    const match = string(runtimeRaw.match, 'target.execution.runtime.match')
+    if (match !== 'inherit' && match !== 'exact' && match !== 'preferred') {
+      throw new Error('target.execution.runtime.match must be inherit, exact, or preferred')
+    }
+    const model = optional(runtimeRaw.model)
+    const reasoningEffort = optional(runtimeRaw.reasoningEffort)
+    runtime = {
+      match,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    }
+  }
+  const requiredCapabilities = raw.requiredCapabilities === undefined
+    ? undefined
+    : stringArray(raw.requiredCapabilities, 'target.execution.requiredCapabilities') as NonNullable<AgentExecutionRequirement['requiredCapabilities']>
+  return {
+    ...(runtime ? { runtime } : {}),
+    ...(requiredCapabilities ? { requiredCapabilities } : {}),
   }
 }
 
@@ -304,13 +346,43 @@ function tools(): unknown[] {
       ambiguity: { type: 'integer', minimum: 0, maximum: 3 },
     },
   }
+  const runtime = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['match'],
+    properties: {
+      model: { type: 'string' },
+      reasoningEffort: { type: 'string' },
+      match: { type: 'string', enum: ['inherit', 'exact', 'preferred'] },
+    },
+  }
+  const execution = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      runtime,
+      requiredCapabilities: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['workspace-read', 'workspace-write', 'shell', 'network', 'browser'],
+        },
+      },
+    },
+  }
   const target = {
     type: 'object',
     additionalProperties: false,
-    required: ['adapterId', 'sessionId'],
+    required: ['adapterId'],
+    oneOf: [
+      { required: ['sessionId'] },
+      { required: ['dedicatedCwd'] },
+    ],
     properties: {
       adapterId: { type: 'string' },
       sessionId: { type: 'string' },
+      dedicatedCwd: { type: 'string' },
+      execution,
       skills: { type: 'array', items: { type: 'string' } },
     },
   }
@@ -385,7 +457,7 @@ function tools(): unknown[] {
     {
       name: 'workflow_prepare',
       description:
-        'Read-only Workflow-state preparation of an expiring 2-6 node, single-Session run-once proposal. The Claude PreToolUse Hook proves the actual caller Session.',
+        'Read-only preparation of an expiring 2-6 node run-once proposal. It preflights either an existing Session or a dedicated Session plan; dedicated resources are not created until workflow_commit.',
       inputSchema: obj(
         {
           assessmentToken: { type: 'string' },
@@ -400,7 +472,7 @@ function tools(): unknown[] {
     {
       name: 'workflow_commit',
       description:
-        'Revalidate an expiring signed proposal and exact binding. The Host must prove the actual calling Session; when confirmation is required, the user must confirm the displayed proposal code.',
+        'Revalidate an expiring signed proposal and execution preflight. Dedicated Sessions are provisioned only after exact user confirmation.',
       inputSchema: obj(
         {
           proposal: { type: 'object' },

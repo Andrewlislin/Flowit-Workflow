@@ -11,16 +11,18 @@ import type {
   PipelineEventAdmission,
   PipelineDefinition,
   ScheduledTask,
+  SessionProvisioningIntent,
   WorkflowState,
 } from './types.js'
 
 const EMPTY_STATE: WorkflowState = {
-  version: 1,
+  version: 2,
   schedules: [],
   pipelines: [],
   eventInbox: [],
   runs: [],
   terminalReceipts: [],
+  provisioningIntents: [],
 }
 const LEGACY_PID_INITIALIZATION_GRACE_MS = 2_000
 const LEGACY_PID_GUARD_TIMEOUT_MS = 5_000
@@ -112,6 +114,33 @@ export class JsonWorkflowStore {
       if (index >= 0) state.runs[index] = run
       else state.runs.push(run)
       this.pruneRuns(state)
+    })
+  }
+
+  async reserveProvisioningIntent(
+    intent: SessionProvisioningIntent,
+  ): Promise<{ created: boolean; intent: SessionProvisioningIntent }> {
+    return this.transact(state => {
+      const existing = state.provisioningIntents.find(candidate => candidate.id === intent.id)
+      if (existing) return { created: false, intent: structuredClone(existing) }
+      const stored = structuredClone(intent)
+      state.provisioningIntents.push(stored)
+      return { created: true, intent: structuredClone(stored) }
+    })
+  }
+
+  async replaceProvisioningIntent(intent: SessionProvisioningIntent): Promise<void> {
+    await this.mutate(state => {
+      const index = state.provisioningIntents.findIndex(candidate => candidate.id === intent.id)
+      if (index < 0) throw new Error(`unknown provisioning intent ${intent.id}`)
+      state.provisioningIntents[index] = structuredClone(intent)
+    })
+  }
+
+  async removeProvisioningIntent(id: string): Promise<void> {
+    await this.mutate(state => {
+      const index = state.provisioningIntents.findIndex(candidate => candidate.id === id)
+      if (index >= 0) state.provisioningIntents.splice(index, 1)
     })
   }
 
@@ -493,8 +522,13 @@ export class JsonWorkflowStore {
     await withGenerationFileLock(this.filePath, async () => {
       await this.migrateLegacyIfNeeded()
       const current = await readWorkflowFile(this.filePath)
-      if (current) this.state = current
-      else {
+      if (current) {
+        if (current.version === 1) {
+          current.version = 2
+          await this.persist(current)
+        }
+        this.state = current
+      } else {
         await this.persist(EMPTY_STATE)
         this.state = structuredClone(EMPTY_STATE)
       }
@@ -551,7 +585,13 @@ export class JsonWorkflowStore {
   }
 
   private async readCurrent(): Promise<WorkflowState> {
-    return (await readWorkflowFile(this.filePath)) ?? structuredClone(EMPTY_STATE)
+    const current = (await readWorkflowFile(this.filePath)) ?? structuredClone(EMPTY_STATE)
+    if (current.version !== 2) {
+      throw new Error(
+        'workflow state regressed to version 1 after startup; an older Flowit worker may still be active',
+      )
+    }
+    return current
   }
   private async persist(state: WorkflowState): Promise<void> {
     await durableReplaceText(this.filePath, `${JSON.stringify(state, null, 2)}\n`)
@@ -697,7 +737,7 @@ async function readWorkflowFile(filePath: string): Promise<WorkflowState | undef
 }
 function normalizeState(parsed: WorkflowState): WorkflowState {
   if (
-    parsed.version !== 1 ||
+    (parsed.version !== 1 && parsed.version !== 2) ||
     !Array.isArray(parsed.schedules) ||
     !Array.isArray(parsed.pipelines) ||
     !Array.isArray(parsed.runs)
@@ -705,6 +745,9 @@ function normalizeState(parsed: WorkflowState): WorkflowState {
     throw new Error('unsupported Flowit Workflow state')
   parsed.eventInbox = Array.isArray(parsed.eventInbox) ? parsed.eventInbox : []
   parsed.terminalReceipts = Array.isArray(parsed.terminalReceipts) ? parsed.terminalReceipts : []
+  parsed.provisioningIntents = Array.isArray(parsed.provisioningIntents)
+    ? parsed.provisioningIntents
+    : []
   parsed.runs = parsed.runs.map(run => ({
     ...run,
     attempt: run.attempt ?? 1,
@@ -739,11 +782,18 @@ function isEmptyState(state: WorkflowState): boolean {
     state.pipelines.length === 0 &&
     state.eventInbox.length === 0 &&
     state.runs.length === 0 &&
-    state.terminalReceipts.length === 0
+    state.terminalReceipts.length === 0 &&
+    state.provisioningIntents.length === 0
   )
 }
 function equivalentState(a: WorkflowState, b: WorkflowState): boolean {
-  return isDeepStrictEqual(a, b)
+  const left = structuredClone(a)
+  const right = structuredClone(b)
+  left.version = 2
+  right.version = 2
+  left.provisioningIntents ??= []
+  right.provisioningIntents ??= []
+  return isDeepStrictEqual(left, right)
 }
 async function archiveLegacyFile(sourcePath: string): Promise<void> {
   const archived = `${sourcePath}.migrated-v0.4-${new Date().toISOString().replace(/[:.]/g, '-')}`

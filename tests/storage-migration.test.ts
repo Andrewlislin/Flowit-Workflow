@@ -7,14 +7,14 @@ import { JsonWorkflowStore } from '../src/core/store.js'
 import { BUILT_IN_ADAPTER_IDS, resolveConfiguredRuntime } from '../src/runtime-factory.js'
 import type { WorkflowState } from '../src/core/types.js'
 
-const EMPTY: WorkflowState = { version: 1, schedules: [], pipelines: [], eventInbox: [], runs: [], terminalReceipts: [] }
+const EMPTY: WorkflowState = { version: 1, schedules: [], pipelines: [], eventInbox: [], runs: [], terminalReceipts: [], provisioningIntents: [] }
 
 function legacyState(name: string): WorkflowState {
   const now = new Date('2026-08-26T00:00:00.000Z').toISOString()
   return {
     version: 1,
     schedules: [{ id: 'legacy-schedule', name, target: { adapterId: 'claude-code', sessionId: 's1', prompt: 'work', skills: [], contextRefs: [] }, timing: { kind: 'every', everySeconds: 3600 }, status: 'active', nextRunAt: '2026-08-27T00:00:00.000Z', createdAt: now, updatedAt: now }],
-    pipelines: [], eventInbox: [], runs: [], terminalReceipts: [],
+    pipelines: [], eventInbox: [], runs: [], terminalReceipts: [], provisioningIntents: [],
   }
 }
 
@@ -34,6 +34,8 @@ test('v0.4 empty default database is replaced by non-empty v0.3 legacy state and
     await writeState(target, EMPTY)
     const store = new JsonWorkflowStore(target, 500, [legacy])
     const state = await store.snapshot()
+    assert.equal(state.version, 2)
+    assert.equal(JSON.parse(await readFile(target, 'utf8')).version, 2)
     assert.equal(state.schedules[0]?.name, 'legacy task')
     await assert.rejects(readFile(legacy, 'utf8'), error => (error as NodeJS.ErrnoException).code === 'ENOENT')
     const archived = (await readdir(path.dirname(legacy))).filter(name => name.startsWith('workflow.json.migrated-v0.4-'))
@@ -117,4 +119,21 @@ test('migration never deletes an incomplete legacy pid file after initialization
     assert.equal(await readFile(pidFile, 'utf8'), '')
     assert.match(await readFile(legacy, 'utf8'), /legacy task/)
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+
+test('version 2 execution state is a fail-closed fence for version 1 workers', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-mixed-version-fence-'))
+  const target = path.join(root, 'workflow.json')
+  try {
+    await writeState(target, EMPTY)
+    const store = new JsonWorkflowStore(target)
+    assert.equal((await store.snapshot()).version, 2)
+    const persisted = JSON.parse(await readFile(target, 'utf8')) as { version: number }
+    assert.throws(() => {
+      if (persisted.version !== 1) throw new Error('unsupported Flowit Workflow state')
+    }, /unsupported Flowit Workflow state/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
