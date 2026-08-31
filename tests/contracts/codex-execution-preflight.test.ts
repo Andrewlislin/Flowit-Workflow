@@ -207,6 +207,217 @@ test('Codex provisions and dispatches with the catalog runtime model, not the pi
   }
 })
 
+
+async function nullReasoningCodex(root: string): Promise<string> {
+  const executable = path.join(root, 'codex-null-reasoning')
+  const rows = [model('picker-null', 'model-null', ['high'], true, 'high')]
+  const source = `#!/usr/bin/env node
+const readline = require('node:readline');
+const models = ${JSON.stringify(rows)};
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+rl.on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialized') return;
+  if (msg.id === undefined || msg.id === null) return;
+  if (msg.method === 'initialize') return send({id:msg.id,result:{userAgent:'null-reasoning'}});
+  if (msg.method === 'model/list') return send({id:msg.id,result:{data:models,nextCursor:null}});
+  if (msg.method === 'thread/list') return send({id:msg.id,result:{data:[{id:'stored-null',status:'notLoaded',cwd:${JSON.stringify(root)}}]}});
+  if (msg.method === 'skills/list') return send({id:msg.id,result:{data:[]}});
+  if (msg.method === 'thread/start') return send({id:msg.id,result:{thread:{id:'created-null',status:'idle',cwd:msg.params.cwd},model:msg.params.model,reasoningEffort:null,cwd:msg.params.cwd}});
+  if (msg.method === 'thread/resume') return send({id:msg.id,result:{thread:{id:msg.params.threadId,status:'idle',cwd:${JSON.stringify(root)}},model:msg.params.model,reasoningEffort:null,cwd:${JSON.stringify(root)}}});
+});
+`
+  await writeFile(executable, source, 'utf8')
+  await chmod(executable, 0o755)
+  return executable
+}
+
+test('Codex never backfills a null Host reasoning effort from catalog evidence', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-null-reasoning-'))
+  const adapter = new CodexAgentAdapter({
+    executable: await nullReasoningCodex(root),
+    requestTimeoutMs: 1_000,
+  })
+  const execution = {
+    runtime: {
+      model: 'model-null',
+      reasoningEffort: 'high',
+      match: 'exact' as const,
+    },
+  }
+  try {
+    await assert.rejects(
+      adapter.provisionSession({
+        correlationId: 'null-start',
+        session: { kind: 'dedicated', cwd: root },
+        requirement: execution,
+        skills: [],
+      }),
+      /did not report an actual reasoning effort/,
+    )
+    await assert.rejects(
+      adapter.dispatch({
+        correlationId: 'null-resume',
+        sessionId: 'stored-null',
+        prompt: 'work',
+        skills: [],
+        contextRefs: [],
+        execution,
+      }),
+      /did not report an actual reasoning effort/,
+    )
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+async function reroutingCodex(root: string): Promise<string> {
+  const executable = path.join(root, 'codex-rerouting')
+  const rows = [
+    model('picker-a', 'model-a', ['high'], true, 'high'),
+    model('picker-b', 'model-b', ['high'], false, 'high'),
+  ]
+  const source = `#!/usr/bin/env node
+const readline = require('node:readline');
+const models = ${JSON.stringify(rows)};
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+let turn = 0;
+rl.on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialized') return;
+  if (msg.id === undefined || msg.id === null) return;
+  if (msg.method === 'initialize') return send({id:msg.id,result:{userAgent:'rerouting'}});
+  if (msg.method === 'model/list') return send({id:msg.id,result:{data:models,nextCursor:null}});
+  if (msg.method === 'thread/resume') return send({id:msg.id,result:{thread:{id:msg.params.threadId,status:'idle',cwd:${JSON.stringify(root)}},model:msg.params.model,reasoningEffort:'high',cwd:${JSON.stringify(root)}}});
+  if (msg.method === 'skills/list') return send({id:msg.id,result:{data:[]}});
+  if (msg.method === 'turn/start') {
+    const turnId = 'reroute-turn-' + (++turn);
+    send({id:msg.id,result:{turn:{id:turnId,status:'inProgress'}}});
+    send({method:'model/rerouted',params:{threadId:msg.params.threadId,turnId,fromModel:'model-a',toModel:'model-b',reason:'safety'}});
+    return send({method:'turn/completed',params:{threadId:msg.params.threadId,turn:{id:turnId,status:'completed',error:null}}});
+  }
+  if (msg.method === 'thread/read') return send({id:msg.id,result:{thread:{id:msg.params.threadId,status:'idle'},turns:[]}});
+});
+`
+  await writeFile(executable, source, 'utf8')
+  await chmod(executable, 0o755)
+  return executable
+}
+
+test('model/rerouted violates exact execution and updates preferred evidence', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-reroute-'))
+  const adapter = new CodexAgentAdapter({
+    executable: await reroutingCodex(root),
+    requestTimeoutMs: 1_000,
+    turnTimeoutMs: 1_000,
+  })
+  try {
+    await assert.rejects(
+      adapter.dispatch({
+        correlationId: 'reroute-exact',
+        sessionId: 'reroute-session',
+        prompt: 'work',
+        skills: [],
+        contextRefs: [],
+        execution: {
+          runtime: {
+            model: 'model-a',
+            reasoningEffort: 'high',
+            match: 'exact',
+          },
+        },
+      }),
+      /rerouted exact model model-a from model-a to model-b/,
+    )
+
+    const preferred = await adapter.dispatch({
+      correlationId: 'reroute-preferred',
+      sessionId: 'reroute-session',
+      prompt: 'work',
+      skills: [],
+      contextRefs: [],
+      execution: {
+        runtime: {
+          model: 'model-a',
+          reasoningEffort: 'high',
+          match: 'preferred',
+        },
+      },
+    })
+    assert.equal(preferred.executionEvidence?.runtime?.actualModel, 'model-b')
+    assert.equal(preferred.executionEvidence?.runtime?.actualReasoningEffort, 'high')
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+async function pagedCatalogCodex(root: string, marker: string): Promise<string> {
+  const executable = path.join(root, 'codex-paged-catalog')
+  const firstPage = [model('picker-default', 'default-model', ['medium'], true, 'medium')]
+  const secondPage = [model('picker-late', 'late-model', ['high'], false, 'high')]
+  const source = `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const firstPage = ${JSON.stringify(firstPage)};
+const secondPage = ${JSON.stringify(secondPage)};
+const marker = ${JSON.stringify(marker)};
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+rl.on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialized') return;
+  if (msg.id === undefined || msg.id === null) return;
+  if (msg.method === 'initialize') return send({id:msg.id,result:{userAgent:'paged'}});
+  if (msg.method === 'model/list') {
+    fs.appendFileSync(marker, JSON.stringify(msg.params || {}) + '\\n');
+    if (msg.params && msg.params.cursor === 'page-2') {
+      return send({id:msg.id,result:{data:secondPage,nextCursor:null}});
+    }
+    return send({id:msg.id,result:{data:firstPage,nextCursor:'page-2'}});
+  }
+  if (msg.method === 'skills/list') return send({id:msg.id,result:{data:[]}});
+});
+`
+  await writeFile(executable, source, 'utf8')
+  await chmod(executable, 0o755)
+  return executable
+}
+
+test('Codex runtime preflight exhausts paginated model catalogs', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-model-pages-'))
+  const marker = path.join(root, 'model-list.jsonl')
+  const adapter = new CodexAgentAdapter({
+    executable: await pagedCatalogCodex(root, marker),
+    requestTimeoutMs: 1_000,
+  })
+  try {
+    const result = await adapter.preflightExecution({
+      correlationId: 'paged-model',
+      session: { kind: 'dedicated', cwd: root },
+      requirement: {
+        runtime: {
+          model: 'late-model',
+          reasoningEffort: 'high',
+          match: 'exact',
+        },
+      },
+      skills: [],
+    })
+    assert.equal(result.status, 'ready')
+    assert.equal(result.evidence.runtime?.actualModel, 'late-model')
+    const requests = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    assert.equal(requests.length, 2)
+    assert.equal(requests[1]?.cursor, 'page-2')
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('Codex capability requirements fail closed without permission evidence', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-permissions-'))
   const fake = await executionAwareCodex(root)

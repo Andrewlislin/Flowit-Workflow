@@ -62,6 +62,13 @@ interface CatalogModel {
   defaultReasoningEffort: string
   supportedReasoningEfforts: string[]
 }
+interface ModelRerouteRecord {
+  threadId: string
+  turnId: string
+  fromModel: string
+  toModel: string
+  reason?: unknown
+}
 type CodexEventListener = (event: AgentEvent) => Promise<void> | void
 
 
@@ -269,11 +276,7 @@ export class CodexAgentAdapter implements AgentAdapter {
     const thread = response?.thread ?? response
     const sessionId = String(thread?.id ?? thread?.threadId ?? '')
     if (!sessionId) throw new Error('Codex thread/start returned no thread id')
-    const runtime = runtimeFromHostResponse(
-      response,
-      runtimeRequirement,
-      selected.runtime,
-    )
+    const runtime = runtimeFromHostResponse(response, runtimeRequirement)
     assertRuntimeMatch(runtimeRequirement, runtime)
     const session: AgentSessionDescriptor = {
       adapterId: this.id,
@@ -361,12 +364,8 @@ export class CodexAgentAdapter implements AgentAdapter {
         true,
       )
     }
-    const runtime = runtimeFromHostResponse(
-      resumed,
-      runtimeRequirement,
-      selected.runtime,
-    )
-    assertRuntimeMatch(runtimeRequirement, runtime)
+    const resumedRuntime = runtimeFromHostResponse(resumed, runtimeRequirement)
+    assertRuntimeMatch(runtimeRequirement, resumedRuntime)
     this.sessionExecutables.set(request.sessionId, selected.executable)
     const cwd = typeof resumed?.cwd === 'string'
       ? resumed.cwd
@@ -382,20 +381,37 @@ export class CodexAgentAdapter implements AgentAdapter {
     )
     const input: any[] = [{ type: 'text', text }]
     for (const skill of skills) input.push({ type: 'skill', name: skill.name, path: skill.path })
-    const started = (await selected.client.request(
-      'turn/start',
-      {
-        threadId: request.sessionId,
-        input,
-        ...(runtime.actualModel ? { model: runtime.actualModel } : {}),
-        ...(runtime.actualReasoningEffort
-          ? { effort: runtime.actualReasoningEffort }
-          : {}),
-      },
-      signal,
-    )) as any
+    const reroutes: ModelRerouteRecord[] = []
+    const stopReroutes = selected.client.onNotification((method, params) => {
+      if (method !== 'model/rerouted') return
+      const reroute = parseModelReroute(params)
+      if (reroute?.threadId === request.sessionId) reroutes.push(reroute)
+    })
+    let started: any
+    try {
+      started = await selected.client.request(
+        'turn/start',
+        {
+          threadId: request.sessionId,
+          input,
+          ...(resumedRuntime.actualModel
+            ? { model: resumedRuntime.actualModel }
+            : {}),
+          ...(resumedRuntime.actualReasoningEffort
+            ? { effort: resumedRuntime.actualReasoningEffort }
+            : {}),
+        },
+        signal,
+      ) as any
+    } catch (error) {
+      stopReroutes()
+      throw error
+    }
     const turnId = String(started?.turn?.id ?? started?.id ?? '')
-    if (!turnId) throw new Error('Codex turn/start returned no turn id')
+    if (!turnId) {
+      stopReroutes()
+      throw new Error('Codex turn/start returned no turn id')
+    }
     let completion: any
     try {
       completion = await selected.client.waitFor(
@@ -407,12 +423,21 @@ export class CodexAgentAdapter implements AgentAdapter {
         this.config.turnTimeoutMs,
       )
     } catch (error: unknown) {
+      stopReroutes()
       await selected.client
         .request('turn/interrupt', { threadId: request.sessionId, turnId }, undefined, 5_000)
         .catch(() => undefined)
       throw error
     }
+    stopReroutes()
+    const turnReroutes = reroutes.filter(reroute => reroute.turnId === turnId)
     assertSuccessfulTurn(completion?.turn, request.sessionId, turnId)
+    const runtime = runtimeAfterModelReroutes(
+      resumedRuntime,
+      runtimeRequirement,
+      turnReroutes,
+    )
+    assertRuntimeMatch(runtimeRequirement, runtime)
     const snapshot = await selected.client
       .request('thread/read', { threadId: request.sessionId, includeTurns: true }, signal)
       .catch(() => undefined)
@@ -554,31 +579,7 @@ export class CodexAgentAdapter implements AgentAdapter {
     executable: string,
     signal?: AbortSignal,
   ): Promise<ResolvedRuntime> {
-    let result: any
-    try {
-      result = await client.request('model/list', { includeHidden: true }, signal)
-    } catch (error: unknown) {
-      throw new CodexCapabilityError(
-        'HOST_VERSION_INCOMPATIBLE',
-        `Codex app-server ${executable} cannot enumerate models required for runtime preflight: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
-    const rows = Array.isArray(result?.data)
-      ? result.data
-      : Array.isArray(result?.models)
-        ? result.models
-        : []
-    const models: CatalogModel[] = rows.flatMap((row: any) => {
-      const parsed = catalogModel(row)
-      return parsed ? [parsed] : []
-    })
-    if (rows.length > 0 && models.length === 0) {
-      throw new CodexCapabilityError(
-        'HOST_VERSION_INCOMPATIBLE',
-        `Codex app-server ${executable} returned a model catalog without the required id, model, defaultReasoningEffort, and supportedReasoningEfforts fields`,
-      )
-    }
-
+    const models = await this.listCatalogModels(client, executable, signal)
     const requestedModel = requirement.model
     const requestedEffort = requirement.reasoningEffort
     const fallback = models.find(model => model.isDefault) ?? models[0]
@@ -614,6 +615,67 @@ export class CodexAgentAdapter implements AgentAdapter {
       actualReasoningEffort,
       verified: true,
     }
+  }
+
+  private async listCatalogModels(
+    client: CodexAppServerClient,
+    executable: string,
+    signal?: AbortSignal,
+  ): Promise<CatalogModel[]> {
+    const rows: any[] = []
+    const seenCursors = new Set<string>()
+    let cursor: string | undefined
+    for (let page = 0; page < 1_000; page += 1) {
+      let result: any
+      try {
+        result = await client.request(
+          'model/list',
+          {
+            includeHidden: true,
+            ...(cursor ? { cursor } : {}),
+          },
+          signal,
+        )
+      } catch (error: unknown) {
+        throw new CodexCapabilityError(
+          'HOST_VERSION_INCOMPATIBLE',
+          `Codex app-server ${executable} cannot enumerate models required for runtime preflight: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      const pageRows = Array.isArray(result?.data)
+        ? result.data
+        : Array.isArray(result?.models)
+          ? result.models
+          : []
+      rows.push(...pageRows)
+      const nextCursor = firstString(result?.nextCursor, result?.next_cursor)
+      if (!nextCursor) break
+      if (seenCursors.has(nextCursor)) {
+        throw new CodexCapabilityError(
+          'HOST_VERSION_INCOMPATIBLE',
+          `Codex app-server ${executable} repeated model/list cursor ${nextCursor}`,
+        )
+      }
+      seenCursors.add(nextCursor)
+      cursor = nextCursor
+      if (page === 999) {
+        throw new CodexCapabilityError(
+          'HOST_VERSION_INCOMPATIBLE',
+          `Codex app-server ${executable} exceeded the model catalog pagination limit`,
+        )
+      }
+    }
+
+    return rows.map((row: any) => {
+      const parsed = catalogModel(row)
+      if (!parsed) {
+        throw new CodexCapabilityError(
+          'HOST_VERSION_INCOMPATIBLE',
+          `Codex app-server ${executable} returned a model catalog row without the required id, model, defaultReasoningEffort, and supportedReasoningEfforts fields`,
+        )
+      }
+      return parsed
+    })
   }
 
   private executionEvidence(
@@ -1105,26 +1167,61 @@ function runtimeFromRequirement(
 function runtimeFromHostResponse(
   response: any,
   requirement: AgentRuntimeRequirement | undefined,
-  fallback: ResolvedRuntime,
 ): ResolvedRuntime {
-  const model = firstString(response?.model, response?.thread?.model)
-  const effort = firstString(
-    response?.reasoningEffort,
-    response?.reasoning_effort,
-    response?.effort,
-    response?.thread?.reasoningEffort,
-    response?.thread?.reasoning_effort,
-  )
+  const model = hasOwn(response, 'model')
+    ? firstString(response?.model)
+    : firstString(response?.thread?.model)
+  const effort = hasOwn(response, 'reasoningEffort')
+    ? firstString(response?.reasoningEffort)
+    : hasOwn(response, 'reasoning_effort')
+      ? firstString(response?.reasoning_effort)
+      : firstString(
+          response?.thread?.reasoningEffort,
+          response?.thread?.reasoning_effort,
+        )
+  const needsVerifiedRuntime = requirement?.match === 'exact' ||
+    requirement?.match === 'preferred'
+  const verified = needsVerifiedRuntime
+    ? (!requirement?.model || Boolean(model)) &&
+      (!requirement?.reasoningEffort || Boolean(effort))
+    : Boolean(model || effort)
   return {
-    ...fallback,
     ...(requirement?.model ? { requestedModel: requirement.model } : {}),
     ...(requirement?.reasoningEffort
       ? { requestedReasoningEffort: requirement.reasoningEffort }
       : {}),
     ...(model ? { actualModel: model } : {}),
     ...(effort ? { actualReasoningEffort: effort } : {}),
-    verified: fallback.verified ||
-      Boolean(model || effort || (!requirement?.model && !requirement?.reasoningEffort)),
+    verified,
+  }
+}
+
+function runtimeAfterModelReroutes(
+  runtime: ResolvedRuntime,
+  requirement: AgentRuntimeRequirement | undefined,
+  reroutes: readonly ModelRerouteRecord[],
+): ResolvedRuntime {
+  let actualModel = runtime.actualModel
+  let exactViolation: ModelRerouteRecord | undefined
+  for (const reroute of reroutes) {
+    actualModel = reroute.toModel
+    if (
+      requirement?.match === 'exact' &&
+      requirement.model &&
+      reroute.toModel !== requirement.model
+    ) {
+      exactViolation ??= reroute
+    }
+  }
+  if (exactViolation) {
+    throw new CodexCapabilityError(
+      'MODEL_UNAVAILABLE',
+      `Codex rerouted exact model ${requirement?.model} from ${exactViolation.fromModel} to ${exactViolation.toModel}`,
+    )
+  }
+  return {
+    ...runtime,
+    ...(actualModel ? { actualModel } : {}),
   }
 }
 
@@ -1132,7 +1229,20 @@ function assertRuntimeMatch(
   requirement: AgentRuntimeRequirement | undefined,
   runtime: ResolvedRuntime,
 ): void {
-  if (!requirement || requirement.match !== 'exact') return
+  if (!requirement || requirement.match === 'inherit') return
+  if (requirement.model && !runtime.actualModel) {
+    throw new CodexCapabilityError(
+      'MODEL_UNAVAILABLE',
+      `Codex Host did not report an actual model for ${requirement.match} model ${requirement.model}`,
+    )
+  }
+  if (requirement.reasoningEffort && !runtime.actualReasoningEffort) {
+    throw new CodexCapabilityError(
+      'REASONING_EFFORT_UNAVAILABLE',
+      `Codex Host did not report an actual reasoning effort for ${requirement.match} effort ${requirement.reasoningEffort}`,
+    )
+  }
+  if (requirement.match !== 'exact') return
   if (requirement.model && runtime.actualModel !== requirement.model) {
     throw new CodexCapabilityError(
       'MODEL_UNAVAILABLE',
@@ -1148,6 +1258,27 @@ function assertRuntimeMatch(
       `Codex selected reasoning effort ${runtime.actualReasoningEffort ?? 'unknown'} instead of exact effort ${requirement.reasoningEffort}`,
     )
   }
+}
+
+function parseModelReroute(params: any): ModelRerouteRecord | undefined {
+  const threadId = firstString(params?.threadId, params?.thread_id)
+  const turnId = firstString(params?.turnId, params?.turn_id)
+  const fromModel = firstString(params?.fromModel, params?.from_model)
+  const toModel = firstString(params?.toModel, params?.to_model)
+  if (!threadId || !turnId || !fromModel || !toModel) return undefined
+  return {
+    threadId,
+    turnId,
+    fromModel,
+    toModel,
+    ...(params?.reason === undefined ? {} : { reason: params.reason }),
+  }
+}
+
+function hasOwn(value: unknown, key: string): boolean {
+  return Boolean(value) &&
+    typeof value === 'object' &&
+    Object.prototype.hasOwnProperty.call(value, key)
 }
 
 function firstString(...values: unknown[]): string | undefined {

@@ -88,14 +88,40 @@ export function assertExecutionPreflightReady(
       : `status=${result.status}`
     throw new Error(`Adapter ${adapterId} execution preflight blocked: ${details}`)
   }
-  if (
-    (requirement?.runtime?.match === 'exact' ||
-      requirement?.runtime?.match === 'preferred') &&
-    result.evidence.runtime?.verified !== true
-  ) {
+  const requested = requirement?.runtime
+  if (requested?.match !== 'exact' && requested?.match !== 'preferred') return
+  const actual = result.evidence.runtime
+  if (actual?.verified !== true) {
     throw new Error(
       `Adapter ${adapterId} execution preflight returned ready without verified runtime evidence`,
     )
+  }
+  if (requested.model) {
+    if (!actual.actualModel) {
+      throw new Error(
+        `Adapter ${adapterId} execution preflight did not report an actual model for ${requested.match} model ${requested.model}`,
+      )
+    }
+    if (requested.match === 'exact' && actual.actualModel !== requested.model) {
+      throw new Error(
+        `Adapter ${adapterId} execution preflight reported actual model ${actual.actualModel} instead of exact model ${requested.model}`,
+      )
+    }
+  }
+  if (requested.reasoningEffort) {
+    if (!actual.actualReasoningEffort) {
+      throw new Error(
+        `Adapter ${adapterId} execution preflight did not report an actual reasoning effort for ${requested.match} effort ${requested.reasoningEffort}`,
+      )
+    }
+    if (
+      requested.match === 'exact' &&
+      actual.actualReasoningEffort !== requested.reasoningEffort
+    ) {
+      throw new Error(
+        `Adapter ${adapterId} execution preflight reported actual reasoning effort ${actual.actualReasoningEffort} instead of exact effort ${requested.reasoningEffort}`,
+      )
+    }
   }
 }
 

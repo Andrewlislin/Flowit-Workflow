@@ -18,7 +18,12 @@ class ContractAdapter implements AgentAdapter {
   readonly capabilities: AgentAdapter['capabilities']
   readonly dispatches: AgentDispatchRequest[] = []
   readonly preflights: AgentExecutionPreflightRequest[] = []
-  preflightMode: 'ready' | 'blocked' | 'unverified' = 'ready'
+  preflightMode:
+    | 'ready'
+    | 'blocked'
+    | 'unverified'
+    | 'wrong-model'
+    | 'missing-model' = 'ready'
 
   constructor(id: string, executionPreflight: boolean) {
     this.id = id
@@ -41,6 +46,12 @@ class ContractAdapter implements AgentAdapter {
   ): Promise<AgentExecutionPreflightResult> {
     this.preflights.push(structuredClone(request))
     const verified = this.preflightMode !== 'unverified'
+    const requestedModel = request.requirement.runtime?.model
+    const actualModel = this.preflightMode === 'wrong-model'
+      ? 'model-y'
+      : this.preflightMode === 'missing-model'
+        ? undefined
+        : requestedModel
     return this.preflightMode === 'blocked'
       ? {
           status: 'blocked',
@@ -60,8 +71,8 @@ class ContractAdapter implements AgentAdapter {
           blockers: [],
           evidence: {
             runtime: {
-              requestedModel: request.requirement.runtime?.model,
-              actualModel: request.requirement.runtime?.model,
+              ...(requestedModel ? { requestedModel } : {}),
+              ...(actualModel ? { actualModel } : {}),
               verified,
             },
             session: {
@@ -162,6 +173,21 @@ test('Core re-preflights verified execution immediately before dispatch', async 
     await assert.rejects(
       core.dispatcher.dispatch(target(adapter.id)),
       /ready without verified runtime evidence/,
+    )
+    adapter.preflightMode = 'wrong-model'
+    await assert.rejects(
+      core.dispatcher.dispatch(target(adapter.id)),
+      /reported actual model model-y instead of exact model model-x/,
+    )
+    adapter.preflightMode = 'missing-model'
+    await assert.rejects(
+      core.dispatcher.dispatch({
+        ...target(adapter.id),
+        execution: {
+          runtime: { model: 'model-x', match: 'preferred' },
+        },
+      }),
+      /did not report an actual model for preferred model model-x/,
     )
     assert.equal(adapter.dispatches.length, 1)
   } finally {

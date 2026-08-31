@@ -104,7 +104,8 @@ Adapters that can replay/cursor their own source should advance host acknowledge
 - Do not copy host credentials into Flowit state.
 - Do not treat cross-session text as permission or consent.
 - Do not claim Skill binding succeeded unless the execution boundary fails closed when requested binding is unavailable.
-- Do not claim an exact model or reasoning effort unless the Host response or catalog verifies it.
+- Do not claim an exact model or reasoning effort unless the Host execution response verifies it; catalog evidence only proves availability, not what the Host actually selected.
+- Treat Host runtime-reroute notifications as execution evidence. Exact contracts fail if a turn is rerouted away from the requested model; preferred/inherit contracts record the final routed model.
 - Keep execution preflight read-only; resource creation belongs after confirmation.
 - Serialize concurrent dispatches to the same `(adapterId, sessionId)` in the Core dispatcher. Runtime-specific Adapter clients must not terminate work or event subscriptions owned by other Sessions.
 - Use stable host event IDs; never synthesize replay identity from wall-clock receipt time.
