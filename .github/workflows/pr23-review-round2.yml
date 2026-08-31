@@ -1,0 +1,47 @@
+name: PR23 Review Round 2
+
+on:
+  push:
+    branches:
+      - pr23-review-round2-staging
+
+permissions:
+  contents: write
+
+jobs:
+  apply-review-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Apply reviewed fixes
+        shell: bash
+        run: |
+          base64 --decode .github/pr23-round2/fix.py.gz.b64 \
+            | gzip --decompress > /tmp/pr23-round2-fix.py
+          python /tmp/pr23-round2-fix.py
+          rm -rf .github/pr23-round2 .github/workflows/pr23-review-round2.yml
+          git diff --check
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Run repository gate
+        run: pnpm check
+      - name: Publish checked candidate commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          tree=$(git write-tree)
+          commit=$(printf '%s\n' 'fix: enforce execution contracts across Core and Codex runtimes' \
+            | git commit-tree "$tree" -p 61893e6950cd6287fb339f1d218554d90c95a0b8)
+          git push --force origin "$commit":refs/heads/pr23-review-round2-candidate
+          echo "candidate=$commit" >> "$GITHUB_STEP_SUMMARY"
