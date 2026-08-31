@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { randomUUID } from 'node:crypto'
+import { AgentExecutionError } from '@coaseedgeltd/flowit-core'
 import type {
   AgentAdapter,
   AgentDispatchRequest,
@@ -72,13 +73,14 @@ interface ModelRerouteRecord {
 type CodexEventListener = (event: AgentEvent) => Promise<void> | void
 
 
-class CodexCapabilityError extends Error {
+class CodexCapabilityError extends AgentExecutionError {
   constructor(
-    readonly code: AgentExecutionBlockerCode,
+    code: AgentExecutionBlockerCode,
     message: string,
-    readonly retryable = false,
+    retryable = false,
   ) {
-    super(message)
+    super(code, message, retryable)
+    this.name = 'CodexCapabilityError'
   }
 }
 
@@ -119,12 +121,7 @@ export class CodexAgentAdapter implements AgentAdapter {
 
   async listSessions(query = '', signal?: AbortSignal): Promise<AgentSessionDescriptor[]> {
     const selected = await this.selectClient(signal)
-    const result = (await selected.client.request(
-      'thread/list',
-      { limit: 200 },
-      signal,
-    )) as any
-    return descriptors(result, query)
+    return this.listSessionDescriptors(selected.client, query, signal)
   }
 
   async validateSkillBindings(
@@ -177,14 +174,13 @@ export class CodexAgentAdapter implements AgentAdapter {
       }
 
       const existingSessionId = request.session.sessionId
-      const result = (await selected.client.request(
-        'thread/list',
-        { limit: 200 },
-        signal,
-      )) as any
-      const exact = descriptors(result, existingSessionId).filter(
-        session => session.sessionId === existingSessionId,
-      )
+      const exact = (
+        await this.listSessionDescriptors(
+          selected.client,
+          existingSessionId,
+          signal,
+        )
+      ).filter(session => session.sessionId === existingSessionId)
       if (exact.length !== 1) {
         return blocked(
           baseEvidence,
@@ -382,10 +378,60 @@ export class CodexAgentAdapter implements AgentAdapter {
     const input: any[] = [{ type: 'text', text }]
     for (const skill of skills) input.push({ type: 'skill', name: skill.name, path: skill.path })
     const reroutes: ModelRerouteRecord[] = []
+    let activeTurnId: string | undefined
+    let violationResolved = false
+    let resolveViolation:
+      | ((value: {
+          error: CodexCapabilityError
+          interrupt: Promise<void>
+        }) => void)
+      | undefined
+    const violationPromise = new Promise<{
+      error: CodexCapabilityError
+      interrupt: Promise<void>
+    }>(resolve => {
+      resolveViolation = resolve
+    })
+    const signalExactRerouteViolation = (
+      reroute: ModelRerouteRecord,
+    ): void => {
+      const requestedModel =
+        runtimeRequirement?.match === 'exact'
+          ? runtimeRequirement.model
+          : undefined
+      if (
+        violationResolved ||
+        !requestedModel ||
+        !activeTurnId ||
+        reroute.turnId !== activeTurnId ||
+        reroute.toModel === requestedModel
+      ) {
+        return
+      }
+      violationResolved = true
+      const error = new CodexCapabilityError(
+        'MODEL_UNAVAILABLE',
+        `Codex rerouted exact model ${requestedModel} from ${reroute.fromModel} to ${reroute.toModel}`,
+      )
+      const interrupt = selected.client
+        .request(
+          'turn/interrupt',
+          { threadId: request.sessionId, turnId: activeTurnId },
+          undefined,
+          5_000,
+        )
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+      resolveViolation?.({ error, interrupt })
+    }
     const stopReroutes = selected.client.onNotification((method, params) => {
       if (method !== 'model/rerouted') return
       const reroute = parseModelReroute(params)
-      if (reroute?.threadId === request.sessionId) reroutes.push(reroute)
+      if (reroute?.threadId !== request.sessionId) return
+      reroutes.push(reroute)
+      signalExactRerouteViolation(reroute)
     })
     let started: any
     try {
@@ -412,21 +458,43 @@ export class CodexAgentAdapter implements AgentAdapter {
       stopReroutes()
       throw new Error('Codex turn/start returned no turn id')
     }
+    activeTurnId = turnId
+    for (const reroute of reroutes) signalExactRerouteViolation(reroute)
     let completion: any
+    let interruptedForViolation = false
     try {
-      completion = await selected.client.waitFor(
-        'turn/completed',
-        params =>
-          String(params?.threadId ?? params?.thread_id ?? '') === request.sessionId &&
-          String(params?.turn?.id ?? params?.turnId ?? '') === turnId,
-        signal,
-        this.config.turnTimeoutMs,
-      )
+      const outcome = await Promise.race([
+        selected.client.waitFor(
+          'turn/completed',
+          params =>
+            String(params?.threadId ?? params?.thread_id ?? '') === request.sessionId &&
+            String(params?.turn?.id ?? params?.turnId ?? '') === turnId,
+          signal,
+          this.config.turnTimeoutMs,
+        ).then(value => ({ kind: 'completed' as const, value })),
+        violationPromise.then(value => ({
+          kind: 'contract-violation' as const,
+          value,
+        })),
+      ])
+      if (outcome.kind === 'contract-violation') {
+        interruptedForViolation = true
+        await outcome.value.interrupt
+        throw outcome.value.error
+      }
+      completion = outcome.value
     } catch (error: unknown) {
       stopReroutes()
-      await selected.client
-        .request('turn/interrupt', { threadId: request.sessionId, turnId }, undefined, 5_000)
-        .catch(() => undefined)
+      if (!interruptedForViolation) {
+        await selected.client
+          .request(
+            'turn/interrupt',
+            { threadId: request.sessionId, turnId },
+            undefined,
+            5_000,
+          )
+          .catch(() => undefined)
+      }
       throw error
     }
     stopReroutes()
@@ -571,6 +639,45 @@ export class CodexAgentAdapter implements AgentAdapter {
     const event = mapCodexEvent(method, params)
     if (!event) return
     for (const listener of [...this.eventListeners]) await listener(event)
+  }
+
+  private async listSessionDescriptors(
+    client: CodexAppServerClient,
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<AgentSessionDescriptor[]> {
+    const rows: any[] = []
+    const seenCursors = new Set<string>()
+    let cursor: string | undefined
+    for (let page = 0; page < 1_000; page += 1) {
+      const result = (await client.request(
+        'thread/list',
+        {
+          limit: 200,
+          ...(cursor ? { cursor } : {}),
+        },
+        signal,
+      )) as any
+      const pageRows = Array.isArray(result?.data) ? result.data : []
+      rows.push(...pageRows)
+      const nextCursor = firstString(result?.nextCursor, result?.next_cursor)
+      if (!nextCursor) break
+      if (seenCursors.has(nextCursor)) {
+        throw new CodexCapabilityError(
+          'HOST_VERSION_INCOMPATIBLE',
+          `Codex app-server repeated thread/list cursor ${nextCursor}`,
+        )
+      }
+      seenCursors.add(nextCursor)
+      cursor = nextCursor
+      if (page === 999) {
+        throw new CodexCapabilityError(
+          'HOST_VERSION_INCOMPATIBLE',
+          'Codex app-server exceeded the thread catalog pagination limit',
+        )
+      }
+    }
+    return descriptors({ data: rows }, query)
   }
 
   private async inspectRuntime(

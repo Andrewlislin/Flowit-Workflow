@@ -5,6 +5,7 @@ import { JsonWorkflowStore } from './store.js'
 import { OrchestrationDispatcher } from './dispatcher.js'
 import { PipelineRuntime } from './pipeline.js'
 import { startLeaseHeartbeat } from './lease.js'
+import { isNonRetryableExecutionError } from './execution-error.js'
 
 const MAX_TIMER_MS = 2_000_000_000
 const DEFAULT_RECONCILE_MS = 1_000
@@ -51,7 +52,25 @@ export class DurableScheduler {
       else await this.dispatcher.dispatchWithCorrelation(task.target, [], triggerKey, claim.run.attempt, signal)
       signal.throwIfAborted(); const completedAt = new Date(); await this.store.completeRun(claim.run.id, this.options.workerId, completedAt); await this.settleOccurrence(task, scheduledAt, triggerKey, 'completed', completedAt)
     }
-    catch (error: unknown) { const failedAt = new Date(); const message = error instanceof Error ? error.message : String(error); const deadLetter = claim.run.attempt >= this.options.maxAttempts; try { await this.store.failRun(claim.run.id, this.options.workerId, message, { retryDelayMs: this.options.retryDelayMs, deadLetter }, failedAt) } catch {} if (deadLetter) await this.settleOccurrence(task, scheduledAt, triggerKey, 'failed', failedAt) }
+    catch (error: unknown) {
+      const failedAt = new Date()
+      const message = error instanceof Error ? error.message : String(error)
+      const deadLetter =
+        isNonRetryableExecutionError(error) ||
+        claim.run.attempt >= this.options.maxAttempts
+      try {
+        await this.store.failRun(
+          claim.run.id,
+          this.options.workerId,
+          message,
+          { retryDelayMs: this.options.retryDelayMs, deadLetter },
+          failedAt,
+        )
+      } catch {}
+      if (deadLetter) {
+        await this.settleOccurrence(task, scheduledAt, triggerKey, 'failed', failedAt)
+      }
+    }
     finally { await heartbeat.stop(); this.localControllers.delete(id) }
   }
 

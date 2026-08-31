@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { AgentExecutionError } from '../src/core/index.js'
 import { FlowitOrchestrationCore } from '../src/core/runtime.js'
 import type {
   AgentAdapter,
@@ -18,6 +19,7 @@ class ContractAdapter implements AgentAdapter {
   readonly capabilities: AgentAdapter['capabilities']
   readonly dispatches: AgentDispatchRequest[] = []
   readonly preflights: AgentExecutionPreflightRequest[] = []
+  dispatchError: Error | undefined
   preflightMode:
     | 'ready'
     | 'blocked'
@@ -87,6 +89,7 @@ class ContractAdapter implements AgentAdapter {
 
   async dispatch(request: AgentDispatchRequest): Promise<AgentDispatchResult> {
     this.dispatches.push(structuredClone(request))
+    if (this.dispatchError) throw this.dispatchError
     return {
       sessionId: request.sessionId,
       loadedSkills: [...request.skills],
@@ -205,7 +208,7 @@ test('persistent Pipeline execution cannot bypass Core execution preflight', asy
     defaultAdapterId: adapter.id,
     activeWorkers: false,
     leaseDurationMs: 1_000,
-    maxPipelineAttempts: 1,
+    maxPipelineAttempts: 3,
   }, [adapter])
   try {
     await core.ready
@@ -222,6 +225,57 @@ test('persistent Pipeline execution cannot bypass Core execution preflight', asy
     await assert.rejects(core.pipelines.run(pipeline.id), /execution preflight blocked/)
     assert.equal(adapter.preflights.length, 1)
     assert.equal(adapter.dispatches.length, 0)
+    const run = (await core.store.snapshot()).runs.find(
+      candidate => candidate.definitionId === pipeline.id,
+    )
+    assert.equal(run?.status, 'dead_letter')
+    assert.equal(run?.attempt, 1)
+  } finally {
+    await core.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('run-once execution-contract failures dead-letter on the first attempt', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-core-execution-run-once-'))
+  const adapter = new ContractAdapter('run-once-contract-adapter', true)
+  adapter.dispatchError = new AgentExecutionError(
+    'MODEL_UNAVAILABLE',
+    'exact model rerouted',
+    false,
+  )
+  const core = new FlowitOrchestrationCore({
+    storageFile: path.join(root, 'workflow.json'),
+    defaultAdapterId: adapter.id,
+    activeWorkers: true,
+    leaseDurationMs: 1_000,
+    retryDelayMs: 10,
+    maxPipelineAttempts: 3,
+  }, [adapter])
+  try {
+    await core.ready
+    const admitted = await core.runOncePipelines.startRunOnce({
+      definitionId: 'execution-contract-run-once',
+      triggerKey: 'execution-contract-trigger',
+      snapshot: {
+        version: 1,
+        name: 'execution contract run-once',
+        nodes: [{
+          id: 'work',
+          target: target(adapter.id),
+          inheritUpstreamContext: false,
+        }],
+        edges: [],
+      },
+    })
+    assert.equal(admitted.status, 'accepted')
+    assert.ok(admitted.runId)
+    await waitUntil(async () =>
+      (await core.runOncePipelines.getRun(admitted.runId!))?.status === 'dead-letter',
+    )
+    const status = await core.runOncePipelines.getRun(admitted.runId!)
+    assert.equal(status?.attempt, 1)
+    assert.equal(adapter.dispatches.length, 1)
   } finally {
     await core.dispose()
     await rm(root, { recursive: true, force: true })
@@ -238,7 +292,7 @@ test('scheduled target execution cannot bypass Core execution preflight', async 
     activeWorkers: true,
     leaseDurationMs: 1_000,
     retryDelayMs: 10,
-    maxScheduleAttempts: 1,
+    maxScheduleAttempts: 3,
   }, [adapter])
   try {
     await core.ready

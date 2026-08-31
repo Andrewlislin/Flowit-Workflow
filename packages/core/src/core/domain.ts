@@ -16,6 +16,7 @@ import type {
   ScheduleTiming,
   SessionContextRef,
 } from './types.js'
+import { AgentExecutionError } from './execution-error.js'
 import { nonEmpty, normalizeStringList } from './utils.js'
 
 export { nonEmpty, normalizeStringList } from './utils.js'
@@ -86,40 +87,57 @@ export function assertExecutionPreflightReady(
     const details = result.blockers.length
       ? result.blockers.map(item => `${item.code}: ${item.message}`).join('; ')
       : `status=${result.status}`
-    throw new Error(`Adapter ${adapterId} execution preflight blocked: ${details}`)
+    const blocker =
+      result.blockers.find(item => item.retryable === false) ??
+      result.blockers[0]
+    throw new AgentExecutionError(
+      blocker?.code ?? 'UNSUPPORTED',
+      `Adapter ${adapterId} execution preflight blocked: ${details}`,
+      blocker?.retryable ?? false,
+    )
   }
   const requested = requirement?.runtime
   if (requested?.match !== 'exact' && requested?.match !== 'preferred') return
   const actual = result.evidence.runtime
   if (actual?.verified !== true) {
-    throw new Error(
+    throw new AgentExecutionError(
+      'HOST_VERSION_INCOMPATIBLE',
       `Adapter ${adapterId} execution preflight returned ready without verified runtime evidence`,
+      false,
     )
   }
   if (requested.model) {
     if (!actual.actualModel) {
-      throw new Error(
+      throw new AgentExecutionError(
+        'MODEL_UNAVAILABLE',
         `Adapter ${adapterId} execution preflight did not report an actual model for ${requested.match} model ${requested.model}`,
+        false,
       )
     }
     if (requested.match === 'exact' && actual.actualModel !== requested.model) {
-      throw new Error(
+      throw new AgentExecutionError(
+        'MODEL_UNAVAILABLE',
         `Adapter ${adapterId} execution preflight reported actual model ${actual.actualModel} instead of exact model ${requested.model}`,
+        false,
       )
     }
   }
   if (requested.reasoningEffort) {
     if (!actual.actualReasoningEffort) {
-      throw new Error(
+      throw new AgentExecutionError(
+        'REASONING_EFFORT_UNAVAILABLE',
         `Adapter ${adapterId} execution preflight did not report an actual reasoning effort for ${requested.match} effort ${requested.reasoningEffort}`,
+        false,
       )
     }
     if (
       requested.match === 'exact' &&
       actual.actualReasoningEffort !== requested.reasoningEffort
     ) {
-      throw new Error(
+      throw new AgentExecutionError(
+        'REASONING_EFFORT_UNAVAILABLE',
         `Adapter ${adapterId} execution preflight reported actual reasoning effort ${actual.actualReasoningEffort} instead of exact effort ${requested.reasoningEffort}`,
+        false,
       )
     }
   }

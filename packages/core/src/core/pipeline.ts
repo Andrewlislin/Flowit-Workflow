@@ -6,6 +6,7 @@ import { ContextGraph } from './context-graph.js'
 import { JsonWorkflowStore } from './store.js'
 import { OrchestrationDispatcher } from './dispatcher.js'
 import { startLeaseHeartbeat } from './lease.js'
+import { isNonRetryableExecutionError } from './execution-error.js'
 
 const DEFAULT_RECONCILE_MS = 1_000
 const DISPOSE_QUEUE_GRACE_MS = 3_000
@@ -214,7 +215,21 @@ export class PipelineRuntime {
       }
       await this.store.completeRun(running.id, this.options.workerId)
       return 'completed'
-    } catch (error: unknown) { const message = error instanceof Error ? error.message : String(error); try { await this.store.failRun(running.id, this.options.workerId, message, { retryDelayMs: this.options.retryDelayMs, deadLetter: running.attempt >= this.options.maxAttempts }) } catch {} throw error }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      const deadLetter =
+        isNonRetryableExecutionError(error) ||
+        running.attempt >= this.options.maxAttempts
+      try {
+        await this.store.failRun(
+          running.id,
+          this.options.workerId,
+          message,
+          { retryDelayMs: this.options.retryDelayMs, deadLetter },
+        )
+      } catch {}
+      throw error
+    }
     finally { await heartbeat.stop() }
   }
 }

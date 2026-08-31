@@ -50,7 +50,7 @@ The runtime requirement supports three policies:
 - `exact`: a requested model and/or reasoning effort must be verified. Any mismatch blocks preparation or execution.
 - `preferred`: a preferred model and/or reasoning effort is required. The Adapter may use a verified Host-reported substitute, but the actual runtime is recorded as evidence.
 
-For Codex, the Adapter exhausts paginated `model/list` results during preflight, uses `thread/start` for a dedicated Session, and sends explicit `model`/`effort` fields at the turn boundary. Exact requests disable provider fallback. Catalog selection is not reused as actual execution evidence: nullable `thread/start` / `thread/resume` runtime fields are validated independently, and `model/rerouted` notifications determine the final model used by a turn.
+For Codex, the Adapter exhausts paginated `model/list` and `thread/list` results, uses `thread/start` for a dedicated Session, and sends explicit `model`/`effort` fields at the turn boundary. Exact requests disable provider fallback. Catalog selection is not reused as actual execution evidence: nullable `thread/start` / `thread/resume` runtime fields are validated independently. If `model/rerouted` moves an active exact-model turn away from the requested model, Flowit immediately requests `turn/interrupt` and raises a non-retryable execution-contract error; preferred and inherited execution record the final routed model.
 
 ## Existing versus dedicated Sessions
 

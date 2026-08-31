@@ -26,4 +26,6 @@ Follow-up hardening adds a Workflow State v2 mixed-version fence, a durable prov
 
 - Host runtime evidence is rebuilt from `thread/start` / `thread/resume` responses rather than backfilled from catalog selection; nullable reasoning effort fails exact/preferred evidence checks.
 - Codex `model/rerouted` notifications are tracked per executable/thread/turn: exact substitutions fail the node, while preferred/inherit evidence records the final routed model.
-- Model catalog preflight follows `nextCursor` pagination and Core independently checks exact/preferred actual evidence.
+- Model and Session discovery follow `nextCursor` pagination and Core independently checks exact/preferred actual evidence.
+- Exact-model reroutes immediately request `turn/interrupt` and surface a non-retryable execution-contract error; preferred reroutes update final evidence.
+- Durable runtimes dead-letter non-retryable execution-contract failures on the first attempt.

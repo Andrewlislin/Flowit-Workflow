@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { CodexAgentAdapter } from '../../src/adapters/codex.js'
+import { isAgentExecutionError } from '../../src/core/index.js'
 
 function model(
   id: string,
@@ -273,17 +274,22 @@ test('Codex never backfills a null Host reasoning effort from catalog evidence',
   }
 })
 
-async function reroutingCodex(root: string): Promise<string> {
+async function reroutingCodex(
+  root: string,
+): Promise<{ executable: string; marker: string }> {
   const executable = path.join(root, 'codex-rerouting')
+  const marker = path.join(root, 'reroute-requests.jsonl')
   const rows = [
     model('picker-a', 'model-a', ['high'], true, 'high'),
     model('picker-b', 'model-b', ['high'], false, 'high'),
   ]
   const source = `#!/usr/bin/env node
+const fs = require('node:fs');
 const readline = require('node:readline');
 const models = ${JSON.stringify(rows)};
+const marker = ${JSON.stringify(marker)};
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+const send = value => process.stdout.write(JSON.stringify(value) + String.fromCharCode(10));
 let turn = 0;
 rl.on('line', line => {
   const msg = JSON.parse(line);
@@ -297,20 +303,28 @@ rl.on('line', line => {
     const turnId = 'reroute-turn-' + (++turn);
     send({id:msg.id,result:{turn:{id:turnId,status:'inProgress'}}});
     send({method:'model/rerouted',params:{threadId:msg.params.threadId,turnId,fromModel:'model-a',toModel:'model-b',reason:'safety'}});
-    return send({method:'turn/completed',params:{threadId:msg.params.threadId,turn:{id:turnId,status:'completed',error:null}}});
+    if (turn > 1) {
+      return send({method:'turn/completed',params:{threadId:msg.params.threadId,turn:{id:turnId,status:'completed',error:null}}});
+    }
+    return;
+  }
+  if (msg.method === 'turn/interrupt') {
+    fs.appendFileSync(marker, JSON.stringify(msg.params) + String.fromCharCode(10));
+    return send({id:msg.id,result:{}});
   }
   if (msg.method === 'thread/read') return send({id:msg.id,result:{thread:{id:msg.params.threadId,status:'idle'},turns:[]}});
 });
 `
   await writeFile(executable, source, 'utf8')
   await chmod(executable, 0o755)
-  return executable
+  return { executable, marker }
 }
 
 test('model/rerouted violates exact execution and updates preferred evidence', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-reroute-'))
+  const fake = await reroutingCodex(root)
   const adapter = new CodexAgentAdapter({
-    executable: await reroutingCodex(root),
+    executable: fake.executable,
     requestTimeoutMs: 1_000,
     turnTimeoutMs: 1_000,
   })
@@ -330,8 +344,26 @@ test('model/rerouted violates exact execution and updates preferred evidence', a
           },
         },
       }),
-      /rerouted exact model model-a from model-a to model-b/,
+      (error: unknown) => {
+        assert.ok(isAgentExecutionError(error))
+        assert.equal(error.code, 'MODEL_UNAVAILABLE')
+        assert.equal(error.retryable, false)
+        assert.match(
+          error.message,
+          /rerouted exact model model-a from model-a to model-b/,
+        )
+        return true
+      },
     )
+    const interruptsAfterExact = (await readFile(fake.marker, 'utf8'))
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line))
+    assert.deepEqual(interruptsAfterExact, [{
+      threadId: 'reroute-session',
+      turnId: 'reroute-turn-1',
+    }])
 
     const preferred = await adapter.dispatch({
       correlationId: 'reroute-preferred',
@@ -349,6 +381,11 @@ test('model/rerouted violates exact execution and updates preferred evidence', a
     })
     assert.equal(preferred.executionEvidence?.runtime?.actualModel, 'model-b')
     assert.equal(preferred.executionEvidence?.runtime?.actualReasoningEffort, 'high')
+    const allInterrupts = (await readFile(fake.marker, 'utf8'))
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+    assert.equal(allInterrupts.length, 1)
   } finally {
     await adapter.dispose()
     await rm(root, { recursive: true, force: true })
@@ -412,6 +449,76 @@ test('Codex runtime preflight exhausts paginated model catalogs', async () => {
     const requests = (await readFile(marker, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
     assert.equal(requests.length, 2)
     assert.equal(requests[1]?.cursor, 'page-2')
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+async function pagedThreadCodex(root: string, marker: string): Promise<string> {
+  const executable = path.join(root, 'codex-paged-threads')
+  const rows = [model('picker-thread', 'thread-model', ['high'], true, 'high')]
+  const source = `#!/usr/bin/env node
+const fs = require('node:fs');
+const readline = require('node:readline');
+const models = ${JSON.stringify(rows)};
+const marker = ${JSON.stringify(marker)};
+const root = ${JSON.stringify(root)};
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = value => process.stdout.write(JSON.stringify(value) + String.fromCharCode(10));
+rl.on('line', line => {
+  const msg = JSON.parse(line);
+  if (msg.method === 'initialized') return;
+  if (msg.id === undefined || msg.id === null) return;
+  if (msg.method === 'initialize') return send({id:msg.id,result:{userAgent:'paged-threads'}});
+  if (msg.method === 'model/list') return send({id:msg.id,result:{data:models,nextCursor:null}});
+  if (msg.method === 'thread/list') {
+    fs.appendFileSync(marker, JSON.stringify(msg.params || {}) + String.fromCharCode(10));
+    if (msg.params && msg.params.cursor === 'thread-page-2') {
+      return send({id:msg.id,result:{data:[{id:'late-session',status:'notLoaded',cwd:root}],nextCursor:null}});
+    }
+    return send({id:msg.id,result:{data:[{id:'first-session',status:'notLoaded',cwd:root}],nextCursor:'thread-page-2'}});
+  }
+  if (msg.method === 'skills/list') return send({id:msg.id,result:{data:[]}});
+});
+`
+  await writeFile(executable, source, 'utf8')
+  await chmod(executable, 0o755)
+  return executable
+}
+
+test('Codex Session discovery exhausts paginated thread catalogs', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-thread-pages-'))
+  const marker = path.join(root, 'thread-list.jsonl')
+  const adapter = new CodexAgentAdapter({
+    executable: await pagedThreadCodex(root, marker),
+    requestTimeoutMs: 1_000,
+  })
+  try {
+    const sessions = await adapter.listSessions('late-session')
+    assert.equal(sessions.length, 1)
+    assert.equal(sessions[0]?.sessionId, 'late-session')
+
+    await writeFile(marker, '', 'utf8')
+    const preflight = await adapter.preflightExecution({
+      correlationId: 'paged-session',
+      session: { kind: 'existing', sessionId: 'late-session' },
+      requirement: {
+        runtime: {
+          model: 'thread-model',
+          reasoningEffort: 'high',
+          match: 'exact',
+        },
+      },
+      skills: [],
+    })
+    assert.equal(preflight.status, 'ready')
+    const requests = (await readFile(marker, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line))
+    assert.equal(requests.length, 2)
+    assert.equal(requests[1]?.cursor, 'thread-page-2')
   } finally {
     await adapter.dispose()
     await rm(root, { recursive: true, force: true })

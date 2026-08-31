@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import { predecessorIds, topologicalOrder } from './domain.js'
+import { isNonRetryableExecutionError } from './execution-error.js'
 import type {
   AutomationRunNodeResult,
   AutomationRunRecord,
@@ -260,7 +261,10 @@ export class RunOncePipelineRuntime {
       await heartbeat.stop()
       if (this.disposeController.signal.aborted || heartbeat.signal.aborted) throw error
       const message = error instanceof Error ? error.message : String(error)
-      if (running.attempt >= this.options.maxAttempts) {
+      const deadLetter =
+        isNonRetryableExecutionError(error) ||
+        running.attempt >= this.options.maxAttempts
+      if (deadLetter) {
         await this.store.failRun(
           running.id,
           this.options.workerId,

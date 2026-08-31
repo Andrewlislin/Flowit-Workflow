@@ -8,6 +8,7 @@ import type {
 import { AgentAdapterRegistry } from './adapter.js'
 import { ContextGraph } from './context-graph.js'
 import { SkillBinder } from './skill-binding.js'
+import { AgentExecutionError } from './execution-error.js'
 import {
   adapterIdOf,
   assertExecutionPreflightReady,
@@ -53,8 +54,10 @@ export class OrchestrationDispatcher {
         : undefined
       if (requiresExecutionPreflight(execution)) {
         if (adapter.capabilities.executionPreflight !== true || !adapter.preflightExecution) {
-          throw new Error(
+          throw new AgentExecutionError(
+            'UNSUPPORTED',
             `Adapter ${adapterId} cannot verify the requested execution contract`,
+            false,
           )
         }
         const preflight = await adapter.preflightExecution(
