@@ -271,7 +271,74 @@ test('explicit run-once provisions one clean Session, reuses requestId, and reje
   }
 })
 
-test('explicit run-once fails model preflight before provisioning and rejects capability claims', async () => {
+test('capability approval completes before any preflight, intent, or Session mutation', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-explicit-approval-'))
+  const adapter = new DedicatedTestAdapter()
+  const core = await coreWith(root, adapter)
+  try {
+    const base = input(root, 'network-approved')
+    const request: ExplicitRunOnceInput = {
+      ...base,
+      target: {
+        ...base.target,
+        execution: {
+          ...base.target.execution,
+          requiredCapabilities: ['network'],
+        },
+      },
+    }
+    let releaseApproval: (() => void) | undefined
+    let approvalCalls = 0
+    const approvalGate = new Promise<void>(resolve => {
+      releaseApproval = resolve
+    })
+    const pending = startExplicitRunOnce(
+      core,
+      request,
+      {
+        approvalProvider: async plan => {
+          approvalCalls += 1
+          assert.deepEqual(
+            plan.preflight.requirement.requiredCapabilities,
+            ['network', 'workspace-read'],
+          )
+          await approvalGate
+        },
+      },
+    )
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(approvalCalls, 1)
+    assert.equal(adapter.preflightCount, 0)
+    assert.equal(adapter.provisionCount, 0)
+    assert.equal((await core.store.snapshot()).provisioningIntents.length, 0)
+
+    releaseApproval?.()
+    const started = await pending
+    assert.equal(started.sessionId, 'dedicated-1')
+    assert.equal(adapter.preflightCount, 1)
+    assert.equal(adapter.provisionCount, 1)
+
+    let replayApprovalCalls = 0
+    const replay = await startExplicitRunOnce(
+      core,
+      request,
+      {
+        approvalProvider: async () => {
+          replayApprovalCalls += 1
+        },
+      },
+    )
+    assert.equal(replay.action, 'reused')
+    assert.equal(replay.runId, started.runId)
+    assert.equal(replayApprovalCalls, 0)
+    assert.equal(adapter.provisionCount, 1)
+  } finally {
+    await core.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('explicit run-once fails model preflight before provisioning and rejects unsupported capabilities', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-explicit-preflight-'))
   const adapter = new DedicatedTestAdapter()
   const core = await coreWith(root, adapter)
@@ -292,20 +359,30 @@ test('explicit run-once fails model preflight before provisioning and rejects ca
     assert.equal(adapter.provisionCount, 0)
     assert.equal((await core.store.snapshot()).provisioningIntents.length, 0)
 
-    const capabilityRequest = input(root, 'capability-claim')
+    let approvalCalls = 0
+    const unsupportedCapability = input(root, 'unsupported-browser')
     const preflightBefore = adapter.preflightCount
     await assert.rejects(
-      startExplicitRunOnce(core, {
-        ...capabilityRequest,
-        target: {
-          ...capabilityRequest.target,
-          execution: {
-            requiredCapabilities: ['network'],
+      startExplicitRunOnce(
+        core,
+        {
+          ...unsupportedCapability,
+          target: {
+            ...unsupportedCapability.target,
+            execution: {
+              requiredCapabilities: ['browser'],
+            },
           },
         },
-      }),
-      /does not yet accept requiredCapabilities/,
+        {
+          approvalProvider: async () => {
+            approvalCalls += 1
+          },
+        },
+      ),
+      /supports only workspace-read, workspace-write, and network/,
     )
+    assert.equal(approvalCalls, 0)
     assert.equal(adapter.preflightCount, preflightBefore)
     assert.equal(adapter.provisionCount, 0)
   } finally {
