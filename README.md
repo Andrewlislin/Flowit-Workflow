@@ -70,7 +70,7 @@ WorkBuddy、Claude Code、Codex、OpenCode、DeepSeek Harness、豆包办公等 
 
 浮域负责工作流 Runtime、多 Agent 协作、调度、恢复和 Host 集成；Creator 专注于角色、方法、流程和交付标准。
 
-[10 分钟创建第一个 Studio](docs/studio/quickstart.md) · [Build with Flowit](docs/studio/README.md) · [查看开发示例](examples/studios/)
+[10 分钟创建第一个 Studio](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/quickstart.md) · [Build with Flowit](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/README.md) · [查看开发示例](https://github.com/Andrewlislin/Flowit-Workflow/tree/main/examples/studios)
 
 ## 什么时候值得用浮域？
 
@@ -401,7 +401,7 @@ pnpm build
 
 ## 更多文档
 
-- [Build with Flowit：用浮域创建 AI 工作室](docs/studio/README.md)
+- [Build with Flowit：用浮域创建 AI 工作室](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/README.md)
 - [安装、Doctor、Repair、Uninstall](docs/setup.md)
 - [自适应编排与可信路由](docs/adaptive-routing.md)
 - [内置工作模式与定时激活](docs/presets.md)
