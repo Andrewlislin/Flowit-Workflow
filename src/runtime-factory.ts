@@ -7,6 +7,7 @@ import { OpenCodeAgentAdapter, OPENCODE_ADAPTER_ID } from './adapters/opencode.j
 import { CodexAgentAdapter, CODEX_ADAPTER_ID } from './adapters/codex.js'
 import { WorkBuddyAgentAdapter, WORKBUDDY_ADAPTER_ID } from './adapters/workbuddy.js'
 import { DoubaoOfficeAgentAdapter, DOUBAO_OFFICE_ADAPTER_ID } from './adapters/doubao-office.js'
+import { createCodexPermissionGrantVerifierFromEnvironment } from './execution-grant.js'
 
 export const BUILT_IN_ADAPTER_IDS = [
   CLAUDE_CODE_ADAPTER_ID,
@@ -137,6 +138,7 @@ export function createBuiltInAdapter(id: BuiltInAdapterId, consumerId?: string):
       return new CodexAgentAdapter({
         ...(executable ? { executable } : {}),
         ...(executableCandidates ? { executableCandidates } : {}),
+        permissionGrantVerifier: createCodexPermissionGrantVerifierFromEnvironment(),
       })
     }
     case WORKBUDDY_ADAPTER_ID: {
