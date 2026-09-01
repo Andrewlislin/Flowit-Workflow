@@ -51,7 +51,7 @@ Flowit is not only something you use. The free Flowit Studio authoring tools let
 
 Flowit owns the workflow Runtime, multi-agent coordination, scheduling, recovery and host integration. Creators focus on roles, methods, process design and delivery standards.
 
-[Create your first Studio in 10 minutes](docs/studio/quickstart.en.md) · [Build with Flowit](docs/studio/README.en.md) · [View examples](examples/studios/)
+[Create your first Studio in 10 minutes](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/quickstart.en.md) · [Build with Flowit](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/README.en.md) · [View examples](https://github.com/Andrewlislin/Flowit-Workflow/tree/main/examples/studios)
 
 ## When is Flowit worth using?
 
@@ -320,7 +320,7 @@ pnpm build
 
 ## Documentation
 
-- [Build with Flowit: create AI Studios](docs/studio/README.en.md)
+- [Build with Flowit: create AI Studios](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/README.en.md)
 - [Setup, Doctor, Repair and Uninstall](docs/setup.md)
 - [Built-in work modes and scheduling](docs/presets.md)
 - [Architecture and execution model](docs/architecture.md)
