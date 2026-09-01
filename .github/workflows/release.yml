@@ -113,7 +113,7 @@ jobs:
             echo "NPM_TOKEN is not configured; npm publish will use Trusted Publishing/OIDC if the @coaseedgeltd packages authorize this workflow."
           fi
 
-      - name: Publish exact tarballs to npm beta
+      - name: Publish exact tarballs to npm beta and sync latest
         env:
           VERSION: ${{ steps.version.outputs.version }}
         shell: bash
@@ -125,10 +125,11 @@ jobs:
             local tarball="$2"
             if npm view "${package_name}@${VERSION}" version >/dev/null 2>&1; then
               echo "${package_name}@${VERSION} is already published; skipping."
-              return 0
+            else
+              test -f "${tarball}"
+              npm publish "${tarball}" --access public --tag beta --provenance
             fi
-            test -f "${tarball}"
-            npm publish "${tarball}" --access public --tag beta --provenance
+            npm dist-tag add "${package_name}@${VERSION}" latest
           }
 
           publish_one '@coaseedgeltd/flowit-core' ".tmp-packs/coaseedgeltd-flowit-core-${VERSION}.tgz"

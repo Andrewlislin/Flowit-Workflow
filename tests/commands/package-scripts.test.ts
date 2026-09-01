@@ -68,5 +68,6 @@ test('release workflow publishes the exact organization package set', async () =
       `.tmp-packs/${name.slice(1).replace('/', '-')}-\${VERSION}.tgz`,
     ),
   )
+  assert.match(workflow, /npm dist-tag add "\$\{package_name\}@\$\{VERSION\}" latest/)
   assert.doesNotMatch(workflow, /@coaseedge\//)
 })
