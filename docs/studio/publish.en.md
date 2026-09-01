@@ -59,7 +59,7 @@ For example:
 ```text
 SkillHub authenticated the official Installer in its channel
 ≠ SkillHub automatically endorses a third-party publisher
-≠ a Package signature can be skipped
+≠ commercial Packages may bypass publisher-signature or trust requirements
 ≠ the user automatically owns a commercial license
 ```
 
