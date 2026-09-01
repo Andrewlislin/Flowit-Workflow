@@ -4,6 +4,7 @@ import {
   getExplicitRunOnce,
   startExplicitRunOnce,
   type ExplicitRunOnceInput,
+  type ExplicitRunOnceStartOptions,
 } from './explicit-run-once.js'
 import {
   commitPreparedWorkflow,
@@ -36,7 +37,11 @@ export type ControlRequest =
       options?: CommitPreparedWorkflowOptions
     }
   | { op: 'workflow.run.get'; runId: string }
-  | { op: 'run-once.start'; input: ExplicitRunOnceInput }
+  | {
+      op: 'run-once.start'
+      input: ExplicitRunOnceInput
+      options?: ExplicitRunOnceStartOptions
+    }
   | { op: 'run-once.get'; runId: string }
 
 export async function executeControl(
@@ -89,7 +94,7 @@ export async function executeControl(
     case 'workflow.run.get':
       return getAdaptiveWorkflowRun(core, request.runId)
     case 'run-once.start':
-      return startExplicitRunOnce(core, request.input)
+      return startExplicitRunOnce(core, request.input, request.options)
     case 'run-once.get':
       return getExplicitRunOnce(core, request.runId)
     default: {
