@@ -38,6 +38,14 @@ test('release validation commands preserve the reviewed pack order', async () =>
   assert.ok(value.check.indexOf('npm run check:pack') < value.check.indexOf('npm run check:release'))
 })
 
+test('release command contract targets v0.5.0-beta.3', async () => {
+  const manifest = JSON.parse(await readFile('package.json', 'utf8')) as { version?: string }
+  assert.equal(manifest.version, '0.5.0-beta.3')
+
+  const notes = await readFile(`docs/releases/v${manifest.version}.md`, 'utf8')
+  assert.match(notes, /^# Flowit Workflow v0\.5\.0-beta\.3$/m)
+})
+
 test('release workflow publishes the exact organization package set', async () => {
   const workflow = await readFile('.github/workflows/release.yml', 'utf8')
   const expectedPackages = [

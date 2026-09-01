@@ -6,6 +6,9 @@ import test from 'node:test'
 import { CodexAgentAdapter } from '../../src/adapters/codex.js'
 import { isAgentExecutionError } from '../../src/core/index.js'
 
+const FAKE_SERVER_REQUEST_TIMEOUT_MS = 5_000
+const TRANSIENT_REQUEST_TIMEOUT_MS = 5_000
+
 function model(
   id: string,
   runtimeModel: string,
@@ -98,7 +101,7 @@ test('Codex preflight validates the runtime model field and maps notLoaded Sessi
   const fake = await executionAwareCodex(root)
   const adapter = new CodexAgentAdapter({
     executable: fake.executable,
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 1_000,
   })
   try {
@@ -160,7 +163,7 @@ test('Codex provisions and dispatches with the catalog runtime model, not the pi
   const fake = await executionAwareCodex(root)
   const adapter = new CodexAgentAdapter({
     executable: fake.executable,
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 1_000,
   })
   const requirement = {
@@ -238,7 +241,7 @@ test('Codex never backfills a null Host reasoning effort from catalog evidence',
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-null-reasoning-'))
   const adapter = new CodexAgentAdapter({
     executable: await nullReasoningCodex(root),
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
   })
   const execution = {
     runtime: {
@@ -325,7 +328,7 @@ test('model/rerouted violates exact execution and updates preferred evidence', a
   const fake = await reroutingCodex(root)
   const adapter = new CodexAgentAdapter({
     executable: fake.executable,
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 1_000,
   })
   try {
@@ -429,7 +432,7 @@ test('Codex runtime preflight exhausts paginated model catalogs', async () => {
   const marker = path.join(root, 'model-list.jsonl')
   const adapter = new CodexAgentAdapter({
     executable: await pagedCatalogCodex(root, marker),
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
   })
   try {
     const result = await adapter.preflightExecution({
@@ -492,7 +495,7 @@ test('Codex Session discovery exhausts paginated thread catalogs', async () => {
   const marker = path.join(root, 'thread-list.jsonl')
   const adapter = new CodexAgentAdapter({
     executable: await pagedThreadCodex(root, marker),
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
   })
   try {
     const sessions = await adapter.listSessions('late-session')
@@ -555,7 +558,7 @@ test('Codex transient model-list timeout remains retryable and later preflight s
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-transient-model-list-'))
   const adapter = new CodexAgentAdapter({
     executable: await transientModelListCodex(root),
-    requestTimeoutMs: 50,
+    requestTimeoutMs: TRANSIENT_REQUEST_TIMEOUT_MS,
   })
   const request = {
     correlationId: 'transient-model-list',
@@ -590,7 +593,10 @@ test('Codex transient model-list timeout remains retryable and later preflight s
 test('Codex capability requirements fail closed without permission evidence', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-permissions-'))
   const fake = await executionAwareCodex(root)
-  const adapter = new CodexAgentAdapter({ executable: fake.executable, requestTimeoutMs: 1_000 })
+  const adapter = new CodexAgentAdapter({
+    executable: fake.executable,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
+  })
   try {
     const result = await adapter.preflightExecution({
       correlationId: 'permissions-1',
@@ -645,7 +651,7 @@ test('runtime-aware selection tries a later Codex binary after default startup',
   const second = await catalogCodex(root, 'codex-second', ['exact-model'], marker)
   const adapter = new CodexAgentAdapter({
     executableCandidates: [first, second],
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
   })
   try {
     await adapter.start()
@@ -735,7 +741,7 @@ test('selecting a second executable does not interrupt an in-flight Session on t
   const second = await concurrentCodex(root, 'client-b', 'model-b', marker, gate)
   const adapter = new CodexAgentAdapter({
     executableCandidates: [first, second],
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
     turnTimeoutMs: 2_000,
   })
   try {
@@ -781,7 +787,7 @@ test('adapter subscriptions receive events from clients created by later runtime
   const second = await concurrentCodex(root, 'event-client-b', 'model-b', marker, gate, true)
   const adapter = new CodexAgentAdapter({
     executableCandidates: [first, second],
-    requestTimeoutMs: 1_000,
+    requestTimeoutMs: FAKE_SERVER_REQUEST_TIMEOUT_MS,
   })
   const events: string[] = []
   try {

@@ -74,7 +74,7 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
             ? request.params.protocolVersion
             : '2025-06-18',
         capabilities: { tools: {} },
-        serverInfo: { name: 'flowit-workflow', version: '0.5.0-beta.2' },
+        serverInfo: { name: 'flowit-workflow', version: '0.5.0-beta.3' },
       }
     case 'ping':
       return {}

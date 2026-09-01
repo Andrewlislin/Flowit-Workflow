@@ -614,11 +614,11 @@ export class CodexAgentAdapter implements AgentAdapter {
   }
 
   private executableCandidates(): string[] {
-    return [...new Set([
+    const configured = [...new Set([
       ...(this.config.executableCandidates ?? []),
       ...(this.config.executable ? [this.config.executable] : []),
-      'codex',
     ].map(item => item.trim()).filter(Boolean))]
+    return configured.length > 0 ? configured : ['codex']
   }
 
   private async getOrCreateClient(

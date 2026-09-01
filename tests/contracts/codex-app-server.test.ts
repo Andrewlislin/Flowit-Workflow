@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -137,7 +137,11 @@ test('child exit rejects waiters and turn timeout sends turn/interrupt', async (
   }
 })
 
-test('adapter start rejects when the Codex executable cannot be spawned', async () => {
+test('explicit executable failure never falls back to Codex on PATH', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-codex-explicit-'))
+  await rename(await fakeCodex(root, 'complete'), path.join(root, 'codex'))
+  const originalPath = process.env.PATH
+  process.env.PATH = `${root}${path.delimiter}${originalPath ?? ''}`
   const adapter = new CodexAgentAdapter({
     executable: path.join(os.tmpdir(), `missing-codex-${Date.now()}`),
     requestTimeoutMs: 200,
@@ -146,6 +150,8 @@ test('adapter start rejects when the Codex executable cannot be spawned', async 
     await assert.rejects(adapter.start(), /ENOENT|exited|spawn/i)
   } finally {
     await adapter.dispose()
+    process.env.PATH = originalPath
+    await rm(root, { recursive: true, force: true })
   }
 })
 

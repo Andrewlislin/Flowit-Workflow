@@ -267,4 +267,4 @@ The known catalog includes:
 - DeepSeek Harness — provider implemented;
 - 豆包办公 — guided Bridge provider implemented.
 
-The initial multi-host setup-provider rollout is complete. The next productization phase is preset/template UX, release packaging, and `v0.5.0-beta.2` validation rather than adding another built-in setup mechanism.
+The initial multi-host setup-provider rollout is complete. The current productization phase adds the Studio Package, SDK, install, and distribution layers rather than another built-in setup mechanism.

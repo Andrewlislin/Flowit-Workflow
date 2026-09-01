@@ -139,7 +139,7 @@ test('build emits every declared public package entrypoint', async () => {
   }
 })
 
-test('distribution manifests use the beta.2 organization package identity', async () => {
+test('distribution manifests use the beta.3 organization package identity', async () => {
   const packageDirectories = await discoverPackageDirectories()
   const expectedNames = new Set([
     '@coaseedgeltd/flowit-workflow',
@@ -158,7 +158,7 @@ test('distribution manifests use the beta.2 organization package identity', asyn
     const manifest = JSON.parse(
       await readFile(path.join(directory, 'package.json'), 'utf8'),
     ) as PackageManifest
-    assert.equal(manifest.version, '0.5.0-beta.2', `${manifest.name} version drifted`)
+    assert.equal(manifest.version, '0.5.0-beta.3', `${manifest.name} version drifted`)
     assert.ok(manifest.name && expectedNames.has(manifest.name), `${directory} has ${manifest.name}`)
     actualNames.add(manifest.name)
 

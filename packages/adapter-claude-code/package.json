@@ -1,6 +1,6 @@
 {
   "name": "@coaseedgeltd/flowit-adapter-claude-code",
-  "version": "0.5.0-beta.2",
+  "version": "0.5.0-beta.3",
   "description": "Claude Code adapter for Flowit Workflow.",
   "license": "Apache-2.0",
   "type": "module",
