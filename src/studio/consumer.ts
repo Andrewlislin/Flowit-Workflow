@@ -307,7 +307,10 @@ function failureStageForResult(
   transaction: AppliedStudioInstallTransaction,
 ): StudioExperienceFailureStage {
   return transaction.hostSetup.results.some(
-    result => result.status === 'failed' || result.status === 'unsupported',
+    result =>
+      result.status === 'partial' ||
+      result.status === 'failed' ||
+      result.status === 'unsupported',
   )
     ? 'host-setup'
     : 'doctor'
