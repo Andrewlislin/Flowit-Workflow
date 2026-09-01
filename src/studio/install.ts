@@ -9,6 +9,17 @@ import {
 import type { HostSetupRegistry } from '../setup/registry.js'
 import type { HostSetupContext, SetupAction, SetupScope } from '../setup/types.js'
 import { loadDeclarativeStudioPreset } from './dsl.js'
+import {
+  licenseRequiredFor,
+  verifyStudioLicense,
+  type StudioLicenseDocumentV1,
+  type VerifiedStudioLicense,
+} from './license.js'
+import {
+  evaluateStudioPackageTrust,
+  StudioTrustStore,
+  type StudioPackageTrust,
+} from './signing.js'
 import type {
   InstalledStudioPackage,
   StudioPackageSnapshot,
@@ -26,12 +37,17 @@ export interface PrepareStudioInstallOptions {
   readonly scope: SetupScope
   readonly projectDir: string
   readonly intent: StudioInstallIntent
+  readonly trustStore?: StudioTrustStore
+  readonly license?: StudioLicenseDocumentV1
+  readonly now?: Date
 }
 
 export interface PreparedStudioInstallTransaction {
   readonly kind: 'studio-install-plan'
   readonly intent: StudioInstallIntent
   readonly snapshot: StudioPackageSnapshot
+  readonly trust: StudioPackageTrust
+  readonly license?: VerifiedStudioLicense
   readonly hostId: string
   readonly scope: SetupScope
   readonly projectDir: string
@@ -51,6 +67,8 @@ export interface AppliedStudioInstallTransaction {
   readonly studioId: string
   readonly version: string
   readonly status: 'complete' | 'manual-action-required' | 'partial'
+  readonly trust: StudioPackageTrust
+  readonly license?: VerifiedStudioLicense
   readonly installed: InstalledStudioPackage
   readonly hostSetup: AppliedSetupMutation
   readonly manualSteps: readonly string[]
@@ -83,8 +101,30 @@ export async function prepareStudioInstallTransaction(
       throw new Error('Studio install intent does not authorize Flowit-managed package files')
     }
 
-    // Review executable declarations only after bytes are inside Flowit-owned staging.
     await loadDeclarativeStudioPreset(descriptor)
+
+    // Trust is evaluated against the same Flowit-owned immutable snapshot that apply commits.
+    const trustStore = options.trustStore ?? new StudioTrustStore()
+    const trust = await evaluateStudioPackageTrust(descriptor, trustStore)
+    const commercial = licenseRequiredFor(descriptor.manifest.license.type)
+    if (commercial && trust.status === 'unsigned') {
+      throw new Error(
+        'commercial Studio packages must be signed by a locally trusted publisher key',
+      )
+    }
+    let license: VerifiedStudioLicense | undefined
+    if (commercial) {
+      if (!options.license) {
+        throw new Error(`Studio ${descriptor.manifest.id} requires a commercial license`)
+      }
+      license = verifyStudioLicense(options.license, trustStore, {
+        packageId: descriptor.manifest.id,
+        publisherId: descriptor.manifest.publisher.id,
+        packageVersion: descriptor.manifest.version,
+        licenseType: descriptor.manifest.license.type,
+        ...(options.now ? { now: options.now } : {}),
+      })
+    }
 
     const projectDir = path.resolve(options.projectDir)
     const hostSetup = await prepareSetupMutation('setup', setupContext, setupRegistry, {
@@ -104,6 +144,8 @@ export async function prepareStudioInstallTransaction(
       kind: 'studio-install-plan',
       intent: options.intent,
       snapshot,
+      trust,
+      ...(license ? { license } : {}),
       hostId: options.hostId,
       scope: options.scope,
       projectDir,
@@ -137,7 +179,7 @@ export async function applyStudioInstallTransaction(
     )
   }
 
-  // commitSnapshot re-fences and re-hashes exactly the bytes reviewed by prepare.
+  // commitSnapshot re-fences/re-hashes the signed snapshot before atomic install.
   const installed = await packageStore.commitSnapshot(prepared.snapshot)
 
   let hostSetup: AppliedSetupMutation
@@ -164,7 +206,14 @@ export async function applyStudioInstallTransaction(
     ...prepared.manualSteps,
     ...hostSetup.results.flatMap(result => result.manualSteps),
   ])
-  const warnings = unique(hostSetup.results.flatMap(result => result.warnings))
+  const warnings = unique([
+    ...hostSetup.results.flatMap(result => result.warnings),
+    ...(prepared.license && !prepared.license.updatesEligible
+      ? [
+          'Studio license remains valid for this major version, but its included update window has ended.',
+        ]
+      : []),
+  ])
   const hostIncomplete = hostSetup.results.some(
     result =>
       result.status === 'partial' ||
@@ -188,6 +237,8 @@ export async function applyStudioInstallTransaction(
         : needsManual
           ? 'manual-action-required'
           : 'complete',
+    trust: prepared.trust,
+    ...(prepared.license ? { license: prepared.license } : {}),
     installed,
     hostSetup,
     manualSteps,
