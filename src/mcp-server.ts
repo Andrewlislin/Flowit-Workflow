@@ -182,7 +182,7 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
         core,
         routingAuthority,
         prepareInput(args),
-        { callerContext },
+        callerContext ? { callerContext } : {},
       )
     }
     case 'workflow_commit': {
@@ -195,7 +195,7 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
         object(args.proposal, 'proposal'),
         string(args.expectedHash, 'expectedHash'),
         {
-          callerContext,
+          ...(callerContext ? { callerContext } : {}),
           ...(confirmationToken ? { confirmationToken } : {}),
         },
       )
