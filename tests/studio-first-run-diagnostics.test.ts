@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { HostSetupRegistry } from '../src/setup/registry.js'
 import type {
+  DoctorReport,
   HostSetupContext,
   HostSetupProvider,
   SetupPlan,
@@ -147,11 +148,11 @@ class ManualSetupProvider implements HostSetupProvider {
       manualSteps: ['Approve native Host trust'],
     }
   }
-  async doctor() {
+  async doctor(): Promise<DoctorReport> {
     return {
       hostId: this.id,
       displayName: this.displayName,
-      status: 'degraded' as const,
+      status: 'degraded',
       checks: [],
     }
   }
@@ -233,11 +234,11 @@ class PartialSetupProvider extends ManualSetupProvider {
       manualSteps: [],
     }
   }
-  override async doctor() {
+  override async doctor(): Promise<DoctorReport> {
     return {
       hostId: this.id,
       displayName: this.displayName,
-      status: 'healthy' as const,
+      status: 'healthy',
       checks: [],
     }
   }
