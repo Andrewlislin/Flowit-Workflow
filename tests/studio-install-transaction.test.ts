@@ -23,6 +23,7 @@ class FakeSetupProvider implements HostSetupProvider {
   readonly displayName = 'Fake Host'
   assumeYes: boolean | undefined
   doctorStatus: DoctorReport['status'] = 'healthy'
+  setupStatus: SetupResult['status'] = 'complete'
 
   async detect() {
     return { hostId: this.id, displayName: this.displayName, status: 'detected' as const }
@@ -62,7 +63,7 @@ class FakeSetupProvider implements HostSetupProvider {
       operation: 'setup',
       hostId: this.id,
       displayName: this.displayName,
-      status: 'complete',
+      status: this.setupStatus,
       appliedActions: plan.actions.map(action => action.id),
       skippedActions: [],
       warnings: [],
@@ -283,6 +284,36 @@ test('elevated Studio permissions stay outside the standard install intent', asy
         ),
       /requires elevated permissions/,
     )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('a partial Host setup never reports a complete Studio install even with healthy Doctor', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-studio-host-partial-'))
+  try {
+    const source = path.join(root, 'source')
+    await createStudio(source)
+    const provider = new FakeSetupProvider()
+    provider.setupStatus = 'partial'
+    provider.doctorStatus = 'healthy'
+    const registry = new HostSetupRegistry([provider])
+    const packageStore = store(root)
+    const intent = createStudioInstallIntent({ studioId: 'acme.safe-studio', source })
+    const prepared = await prepareStudioInstallTransaction(
+      { sourceRoot: source, hostId: 'fake-host', scope: 'user', projectDir: root, intent },
+      context(root),
+      registry,
+      packageStore,
+    )
+    const result = await applyStudioInstallTransaction(
+      prepared,
+      context(root),
+      registry,
+      packageStore,
+    )
+    assert.equal(result.hostSetup.results[0]?.status, 'partial')
+    assert.equal(result.status, 'partial')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
