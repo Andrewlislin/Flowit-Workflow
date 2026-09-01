@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -204,6 +204,45 @@ class ManualSetupProvider implements HostSetupProvider {
   }
 }
 
+class PartialSetupProvider extends ManualSetupProvider {
+  override async planSetup(
+    _context: HostSetupContext,
+    options: { scope: 'user' | 'project' },
+  ): Promise<SetupPlan> {
+    return {
+      version: 1,
+      operation: 'setup',
+      hostId: this.id,
+      displayName: this.displayName,
+      scope: options.scope,
+      summary: 'partial setup',
+      actions: [],
+      warnings: [],
+      manualSteps: [],
+    }
+  }
+  override async applySetup(): Promise<SetupResult> {
+    return {
+      operation: 'setup',
+      hostId: this.id,
+      displayName: this.displayName,
+      status: 'partial',
+      appliedActions: [],
+      skippedActions: [],
+      warnings: [],
+      manualSteps: [],
+    }
+  }
+  override async doctor() {
+    return {
+      hostId: this.id,
+      displayName: this.displayName,
+      status: 'healthy' as const,
+      checks: [],
+    }
+  }
+}
+
 async function createManualStudio(root: string): Promise<void> {
   await mkdir(path.join(root, 'presets'), { recursive: true })
   await mkdir(path.join(root, 'roles'), { recursive: true })
@@ -267,6 +306,54 @@ test('manual-action-required is pending, not install success, in consumer diagno
     assert.equal(report.counts.studio_install_pending_manual, 1)
     assert.equal(report.counts.studio_install_success, 0)
     assert.equal(report.counts.host_setup_success, 0)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('partial Host setup with healthy Doctor remains repair-required and is diagnosed as host setup failure', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-studio-partial-host-'))
+  const source = path.join(root, 'studio')
+  try {
+    await createManualStudio(source)
+    const result = await installStudioForCurrentAgent(
+      {
+        sourceRoot: source,
+        hostId: 'fake-host',
+        projectDir: root,
+        storeRoot: path.join(root, 'store'),
+      },
+      {
+        cwd: root,
+        homeDir: root,
+        setupRegistry: new HostSetupRegistry([new PartialSetupProvider()]),
+        diagnostics: { homeDir: root },
+      },
+    )
+
+    assert.equal(result.transaction.hostSetup.results[0]?.status, 'partial')
+    assert.equal(result.transaction.status, 'partial')
+    assert.equal(result.firstRun.state, 'repair-required')
+    assert.equal(result.firstRun.installationReady, false)
+    assert.equal(result.firstRun.directExecutionAvailable, false)
+
+    const report = await readStudioExperienceReport({ homeDir: root })
+    assert.equal(report.counts.studio_install_failed, 1)
+    assert.equal(report.counts.host_setup_success, 0)
+    assert.equal(report.counts.studio_install_success, 0)
+
+    const diagnosticsFile = path.join(
+      root,
+      '.flowit-workflow',
+      'diagnostics',
+      'experience.jsonl',
+    )
+    const events = (await readFile(diagnosticsFile, 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { event: string; failureStage?: string })
+    const failed = events.find(event => event.event === 'studio_install_failed')
+    assert.equal(failed?.failureStage, 'host-setup')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
