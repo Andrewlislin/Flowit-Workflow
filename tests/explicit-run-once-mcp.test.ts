@@ -10,6 +10,7 @@ interface JsonSchema {
   required?: string[]
   properties?: Record<string, JsonSchema>
   items?: JsonSchema
+  enum?: string[]
   minItems?: number
   maxItems?: number
 }
@@ -37,6 +38,7 @@ async function mcpResponse(
       FLOWIT_WORKFLOW_MUTATIONS: mutations ? '1' : '0',
       FLOWIT_WORKFLOW_STORAGE_FILE: path.join(root, 'workflow.json'),
       FLOWIT_WORKFLOW_ROUTING_AUTHORITY_DIR: path.join(root, 'routing-authority'),
+      FLOWIT_WORKFLOW_EXECUTION_AUTHORITY_DIR: path.join(root, 'execution-authority'),
     },
   })
   try {
@@ -67,14 +69,14 @@ async function toolCatalog(
   return response.result.tools as McpTool[]
 }
 
-test('Codex advertises a bounded dedicated run-once surface without historical Session input', async () => {
+test('Codex advertises bounded approved capabilities without historical Session input', async () => {
   const tools = await toolCatalog('codex')
   const start = tools.find(tool => tool.name === 'run_once_start')
   const get = tools.find(tool => tool.name === 'run_once_get')
   assert.ok(start)
   assert.ok(get)
   assert.match(start.description ?? '', /new, clean, dedicated Codex Session/i)
-  assert.match(start.description ?? '', /requestId/i)
+  assert.match(start.description ?? '', /exact MCP user approval/i)
   assert.deepEqual(
     start.inputSchema?.required,
     ['requestId', 'name', 'goal', 'target', 'steps'],
@@ -83,9 +85,12 @@ test('Codex advertises a bounded dedicated run-once surface without historical S
   assert.deepEqual(target?.required, ['dedicatedCwd'])
   assert.equal(target?.properties?.sessionId, undefined)
   assert.equal(target?.properties?.adapterId, undefined)
-  assert.equal(
-    target?.properties?.execution?.properties?.requiredCapabilities,
-    undefined,
+  const capabilities =
+    target?.properties?.execution?.properties?.requiredCapabilities
+  assert.ok(capabilities)
+  assert.deepEqual(
+    capabilities.items?.enum,
+    ['workspace-read', 'workspace-write', 'network'],
   )
   const steps = start.inputSchema?.properties?.steps
   assert.equal(steps?.minItems, 2)
@@ -120,10 +125,63 @@ test('Claude does not advertise the Codex-only explicit dedicated run-once surfa
   )
 })
 
-test('Codex rejects relative dedicated working directories before Host provisioning', async () => {
+test('network or workspace-write fails before Host startup when MCP elicitation is unavailable', async () => {
   const response = await mcpResponse('codex', {
     jsonrpc: '2.0',
     id: 3,
+    method: 'tools/call',
+    params: {
+      name: 'run_once_start',
+      arguments: {
+        requestId: 'network-without-elicitation',
+        name: 'research',
+        goal: 'research current market evidence',
+        target: {
+          dedicatedCwd: path.resolve(os.tmpdir()),
+          execution: {
+            requiredCapabilities: ['network'],
+          },
+        },
+        steps: [
+          { id: 'research', prompt: 'collect evidence' },
+          { id: 'review', prompt: 'review evidence' },
+        ],
+      },
+    },
+  })
+  assert.match(response.error?.message ?? '', /does not advertise elicitation support/i)
+  assert.match(response.error?.message ?? '', /No Session or Run was created/i)
+})
+
+test('raw sandbox and approval policy fields are rejected instead of treated as authority', async () => {
+  const response = await mcpResponse('codex', {
+    jsonrpc: '2.0',
+    id: 4,
+    method: 'tools/call',
+    params: {
+      name: 'run_once_start',
+      arguments: {
+        requestId: 'raw-policy',
+        name: 'test',
+        goal: 'verify raw policy fields cannot cross the Flowit boundary',
+        target: {
+          dedicatedCwd: path.resolve(os.tmpdir()),
+          sandboxPolicy: { type: 'dangerFullAccess' },
+        },
+        steps: [
+          { id: 'plan', prompt: 'plan' },
+          { id: 'review', prompt: 'review' },
+        ],
+      },
+    },
+  })
+  assert.match(response.error?.message ?? '', /target contains unsupported fields: sandboxPolicy/i)
+})
+
+test('Codex rejects relative dedicated working directories before Host provisioning', async () => {
+  const response = await mcpResponse('codex', {
+    jsonrpc: '2.0',
+    id: 5,
     method: 'tools/call',
     params: {
       name: 'run_once_start',
