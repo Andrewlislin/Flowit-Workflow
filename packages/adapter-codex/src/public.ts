@@ -4,36 +4,29 @@ import type {
 } from '@coaseedgeltd/flowit-core'
 import {
   CodexAgentAdapter as BaseCodexAgentAdapter,
-  CodexAppServerClient,
   type CodexAdapterConfig,
 } from './index.js'
 
 export * from './index.js'
 
 const DEFAULT_OUTPUT_MAX_CHARS = 12_000
-const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
 /**
  * Public Codex adapter facade.
  *
- * The underlying App Server adapter keeps one long-lived client for dispatch.
- * This facade replaces its legacy whole-thread JSON summary with output scoped
- * to the exact completed turn. If the current turn cannot be proven, the
- * summary is omitted rather than leaking unrelated historical thread content.
+ * The underlying App Server adapter returns a bounded serialized thread
+ * snapshot for compatibility. This facade exposes only output from the exact
+ * completed turn. If truncation or an unknown Host shape prevents proving the
+ * current turn, the summary is omitted rather than leaking unrelated history.
  */
 export class CodexAgentAdapter extends BaseCodexAgentAdapter {
   private readonly outputMaxChars: number
-  private readonly outputReadTimeoutMs: number
 
   constructor(config: CodexAdapterConfig = {}) {
     super(config)
     this.outputMaxChars = positiveInteger(
       config.contextMaxChars ?? DEFAULT_OUTPUT_MAX_CHARS,
       DEFAULT_OUTPUT_MAX_CHARS,
-    )
-    this.outputReadTimeoutMs = positiveInteger(
-      config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      DEFAULT_REQUEST_TIMEOUT_MS,
     )
   }
 
@@ -44,41 +37,11 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     const result = await super.dispatch(request, signal)
     const turnId = nonEmptyString(result.runId)
     const legacySummary = nonEmptyString(result.outputSummary)
-    const fromLegacy = turnId && legacySummary
+    const outputSummary = turnId && legacySummary
       ? summarizeSerializedThreadTurn(legacySummary, turnId, this.outputMaxChars)
       : undefined
-    const outputSummary = fromLegacy ?? await this.readCompletedTurn(
-      request.sessionId,
-      turnId,
-      result,
-      signal,
-    )
     const { outputSummary: _legacyWholeThreadSummary, ...safeResult } = result
     return outputSummary ? { ...safeResult, outputSummary } : safeResult
-  }
-
-  private async readCompletedTurn(
-    threadId: string,
-    turnId: string | undefined,
-    result: AgentDispatchResult,
-    signal?: AbortSignal,
-  ): Promise<string | undefined> {
-    const executable = nonEmptyString(result.executionEvidence?.host?.executable)
-    if (!turnId || !executable) return undefined
-    const client = new CodexAppServerClient(executable, this.outputReadTimeoutMs)
-    try {
-      const snapshot = await client.request(
-        'thread/read',
-        { threadId, includeTurns: true },
-        signal,
-        this.outputReadTimeoutMs,
-      )
-      return summarizeThreadTurn(snapshot, turnId, this.outputMaxChars)
-    } catch {
-      return undefined
-    } finally {
-      await client.dispose().catch(() => undefined)
-    }
   }
 }
 
