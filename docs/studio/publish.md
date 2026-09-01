@@ -59,7 +59,7 @@ flowit-studio pack ./my-studio --out=./dist
 ```text
 SkillHub 认证了渠道中的官方 Installer
 ≠ SkillHub 自动替第三方 Publisher 背书
-≠ Package signature 可以省略
+≠ 商业 Package 可以绕过 Publisher signature / trust 要求
 ≠ 用户自动拥有商业 License
 ```
 
