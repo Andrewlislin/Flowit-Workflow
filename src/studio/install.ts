@@ -165,8 +165,11 @@ export async function applyStudioInstallTransaction(
     ...hostSetup.results.flatMap(result => result.manualSteps),
   ])
   const warnings = unique(hostSetup.results.flatMap(result => result.warnings))
-  const hostFailed = hostSetup.results.some(
-    result => result.status === 'failed' || result.status === 'unsupported',
+  const hostIncomplete = hostSetup.results.some(
+    result =>
+      result.status === 'partial' ||
+      result.status === 'failed' ||
+      result.status === 'unsupported',
   )
   const doctorFailed = report?.status === 'unhealthy'
   const needsManual =
@@ -180,7 +183,7 @@ export async function applyStudioInstallTransaction(
     studioId: installed.manifest.id,
     version: installed.manifest.version,
     status:
-      hostFailed || doctorFailed
+      hostIncomplete || doctorFailed
         ? 'partial'
         : needsManual
           ? 'manual-action-required'
