@@ -42,7 +42,7 @@ flowit-studio pack ./customer-research --out=./dist
 | `flowit-studio skillhub <dir>` | 生成只包含数据的 SkillHub payload |
 | `flowit-studio list` | 列出本地已安装 Studio |
 | `flowit-studio install <dir>` | 进入用户侧 Package / Runtime / Host 安装链 |
-| `flowit-studio install-skillhub-payload <dir>` | 从已经冻结和验证的 SkillHub payload 安装 |
+| `flowit-studio install-skillhub-payload <dir>` | 从外部 SkillHub payload 开始，先冻结到 Flowit-owned snapshot，再进入安装链 |
 | `flowit-studio experience-report` | 读取本地安装体验诊断聚合 |
 
 安装命令涉及 Publisher trust、License、Host scope 和 Runtime handoff；不要把它当成普通文件复制。完整语义见 [安装与 Runtime bootstrap](install.md)。
