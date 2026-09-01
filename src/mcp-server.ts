@@ -9,6 +9,7 @@ import type {
   CreatePipelineInput,
   CreateScheduleInput,
 } from './core/types.js'
+import type { ExplicitRunOnceInput } from './explicit-run-once.js'
 import { createConfiguredRuntime, requireBuiltInAdapterId } from './runtime-factory.js'
 import {
   commitPreparedWorkflow,
@@ -36,6 +37,7 @@ const adapterId = requireBuiltInAdapterId(
   'FLOWIT_WORKFLOW_ADAPTER',
 )
 const trustedAdaptiveRoutingHost = adapterId === 'claude-code'
+const explicitDedicatedRunOnceHost = adapterId === 'codex'
 const callerAttestationRequired =
   trustedAdaptiveRoutingHost &&
   process.env.FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION?.trim() !== '0'
@@ -88,6 +90,9 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
       const name = String(request.params?.name ?? '')
       if (name === 'workflow_prepare' || name === 'workflow_commit') {
         assertTrustedAdaptiveRoutingHost(name)
+      }
+      if (name === 'run_once_start' || name === 'run_once_get') {
+        assertExplicitRunOnceHost(name)
       }
       await core.ready
       const args = (request.params?.arguments ?? {}) as Record<string, unknown>
@@ -200,6 +205,20 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
         },
       )
     }
+    case 'run_once_start':
+      assertExplicitRunOnceHost('run_once_start')
+      return executeControl(
+        core,
+        { op: 'run-once.start', input: explicitRunOnceInput(args) },
+        routingAuthority,
+      )
+    case 'run_once_get':
+      assertExplicitRunOnceHost('run_once_get')
+      return executeControl(
+        core,
+        { op: 'run-once.get', runId: string(args.runId, 'runId') },
+        routingAuthority,
+      )
     case 'workflow_run_get':
       return executeControl(
         core,
@@ -249,6 +268,13 @@ function assertTrustedAdaptiveRoutingHost(toolName: RoutingWorkflowToolName): vo
   )
 }
 
+function assertExplicitRunOnceHost(toolName: 'run_once_start' | 'run_once_get'): void {
+  if (explicitDedicatedRunOnceHost) return
+  throw new Error(
+    `Flowit Workflow ${toolName} is unavailable for ${adapterId}: this Host does not expose preflighted dedicated Session provisioning through the explicit run-once control surface.`,
+  )
+}
+
 function assessmentInput(args: Record<string, unknown>): TaskAssessmentRequest {
   const signals = args.signals === undefined
     ? undefined
@@ -263,6 +289,35 @@ function assessmentInput(args: Record<string, unknown>): TaskAssessmentRequest {
     task: string(args.task, 'task'),
     ...(signals ? { signals } : {}),
     ...(authorityToken ? { authorityToken } : {}),
+  }
+}
+
+function explicitRunOnceInput(
+  args: Record<string, unknown>,
+): ExplicitRunOnceInput {
+  const rawTarget = object(args.target, 'target')
+  const execution = parseExecutionRequirement(rawTarget.execution)
+  const rawSteps = args.steps
+  if (!Array.isArray(rawSteps)) throw new Error('steps must be an array')
+  return {
+    requestId: string(args.requestId, 'requestId'),
+    name: string(args.name, 'name'),
+    goal: string(args.goal, 'goal'),
+    target: {
+      adapterId,
+      dedicatedCwd: string(rawTarget.dedicatedCwd, 'target.dedicatedCwd'),
+      ...(rawTarget.skills === undefined
+        ? {}
+        : { skills: stringArray(rawTarget.skills, 'target.skills') }),
+      ...(execution ? { execution } : {}),
+    },
+    steps: rawSteps.map((value, index) => {
+      const step = object(value, `steps[${index}]`)
+      return {
+        id: string(step.id, `steps[${index}].id`),
+        prompt: string(step.prompt, `steps[${index}].prompt`),
+      }
+    }),
   }
 }
 
@@ -315,7 +370,10 @@ function parseExecutionRequirement(value: unknown): AgentExecutionRequirement | 
   }
   const requiredCapabilities = raw.requiredCapabilities === undefined
     ? undefined
-    : stringArray(raw.requiredCapabilities, 'target.execution.requiredCapabilities') as NonNullable<AgentExecutionRequirement['requiredCapabilities']>
+    : stringArray(
+        raw.requiredCapabilities,
+        'target.execution.requiredCapabilities',
+      ) as NonNullable<AgentExecutionRequirement['requiredCapabilities']>
   return {
     ...(runtime ? { runtime } : {}),
     ...(requiredCapabilities ? { requiredCapabilities } : {}),
@@ -423,6 +481,28 @@ function tools(): unknown[] {
       skills: { type: 'array', items: { type: 'string' } },
     },
   }
+  const explicitRunOnceExecution = obj({ runtime })
+  const explicitRunOnceTarget = obj(
+    {
+      dedicatedCwd: {
+        type: 'string',
+        description: 'Absolute working directory for a new dedicated Host Session.',
+      },
+      skills: { type: 'array', items: { type: 'string' } },
+      execution: explicitRunOnceExecution,
+    },
+    ['dedicatedCwd'],
+  )
+  const explicitRunOnceStep = obj(
+    {
+      id: {
+        type: 'string',
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$',
+      },
+      prompt: { type: 'string' },
+    },
+    ['id', 'prompt'],
+  )
   const callerToken = {
     type: 'string',
     description:
@@ -532,10 +612,41 @@ function tools(): unknown[] {
         },
       ]
     : []
+  const explicitRunOnceTools = explicitDedicatedRunOnceHost
+    ? [
+        {
+          name: 'run_once_start',
+          description:
+            'Start an explicit 浮域 (Flowit Workflow) 2-6 stage run-once workflow in a new, clean, dedicated Codex Session. This is a mutation under Host-native approval, not adaptive routing authority. Reuse the exact requestId for retries; the same requestId cannot be rebound to different input.',
+          inputSchema: obj(
+            {
+              requestId: { type: 'string', minLength: 1, maxLength: 256 },
+              name: { type: 'string', minLength: 1, maxLength: 200 },
+              goal: { type: 'string', minLength: 1 },
+              target: explicitRunOnceTarget,
+              steps: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 6,
+                items: explicitRunOnceStep,
+              },
+            },
+            ['requestId', 'name', 'goal', 'target', 'steps'],
+          ),
+        },
+        {
+          name: 'run_once_get',
+          description:
+            'Read status and durable node checkpoints for an explicit dedicated Flowit run-once workflow.',
+          inputSchema: obj({ runId: { type: 'string' } }, ['runId']),
+        },
+      ]
+    : []
   return [
     ...commonTools,
     assessmentTool,
     ...trustedAdaptiveTools,
+    ...explicitRunOnceTools,
     {
       name: 'workflow_run_get',
       description: 'Read the current status and node checkpoints of an adaptive run-once Pipeline.',
@@ -558,6 +669,7 @@ function isMutation(name: string): boolean {
     'pipeline_run',
     'pipeline_status',
     'workflow_commit',
+    'run_once_start',
     'daemon_start',
   ]).has(name)
 }
