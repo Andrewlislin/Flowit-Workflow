@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "coaseedge.research-starter",
+  "displayName": "Research Starter",
+  "description": "Example third-party-compatible Flowit Studio package.",
+  "publisher": {
+    "id": "coaseedge",
+    "displayName": "CoaseEdge"
+  },
+  "version": "1.0.0",
+  "runtime": {
+    "id": "flowit-workflow",
+    "version": ">=0.5.0-beta.2 <1",
+    "bootstrap": "official"
+  },
+  "supportedHosts": ["claude-code", "codex"],
+  "entryPreset": "research-starter",
+  "license": {
+    "type": "open-source",
+    "notice": "Example content follows the repository Apache-2.0 license."
+  }
+}
