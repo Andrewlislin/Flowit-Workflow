@@ -45,6 +45,14 @@ Flowit tracks when work should run, which Session owns each stage, which Skills 
 
 It does **not** replace host authentication, models, permissions, sandboxes, workspace trust or tool approvals. The selected agent still performs the actual work.
 
+## Build AI Studios with Flowit
+
+Flowit is not only something you use. The free Flowit Studio authoring tools let you turn a professional method into a validated, installable and distributable AI Studio that runs on Flowit.
+
+Flowit owns the workflow Runtime, multi-agent coordination, scheduling, recovery and host integration. Creators focus on roles, methods, process design and delivery standards.
+
+[Create your first Studio in 10 minutes](docs/studio/quickstart.en.md) · [Build with Flowit](docs/studio/README.en.md) · [View examples](examples/studios/)
+
 ## When is Flowit worth using?
 
 For a quick email rewrite, one PDF summary, one small function or a tiny bug fix, directly using WorkBuddy, Claude Code or Codex is usually simpler.
@@ -299,7 +307,7 @@ The Core stores orchestration facts and references. Host adapters translate thos
 
 See [docs/architecture.md](docs/architecture.md) for the execution model.
 
-## Developer quick start
+## Contributing to Flowit Workflow
 
 ```bash
 pnpm install
@@ -312,6 +320,7 @@ pnpm build
 
 ## Documentation
 
+- [Build with Flowit: create AI Studios](docs/studio/README.en.md)
 - [Setup, Doctor, Repair and Uninstall](docs/setup.md)
 - [Built-in work modes and scheduling](docs/presets.md)
 - [Architecture and execution model](docs/architecture.md)
