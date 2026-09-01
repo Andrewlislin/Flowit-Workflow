@@ -15,6 +15,10 @@
       "types": "./dist/core/index.d.ts",
       "default": "./dist/core/index.js"
     },
+    "./studio": {
+      "types": "./dist/studio/index.d.ts",
+      "default": "./dist/studio/index.js"
+    },
     "./claude-code": {
       "types": "./dist/claude/index.d.ts",
       "default": "./dist/claude/index.js"
@@ -57,7 +61,8 @@
     }
   },
   "bin": {
-    "flowit-workflow": "dist/cli.js"
+    "flowit-workflow": "dist/cli.js",
+    "flowit-studio": "dist/studio/cli-entry.js"
   },
   "files": [
     "dist",

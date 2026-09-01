@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "id": "research-starter",
+  "displayName": "Research Starter",
+  "description": "A minimal evidence/review Studio used as an SDK example.",
+  "input": {
+    "required": true,
+    "label": "Research question"
+  },
+  "roles": [
+    {
+      "id": "researcher",
+      "displayName": "Researcher",
+      "description": "Collect evidence and write a concise research artifact"
+    },
+    {
+      "id": "reviewer",
+      "displayName": "Reviewer",
+      "description": "Review evidence quality and unsupported claims"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "research",
+      "roleId": "researcher",
+      "promptFile": "roles/researcher.md"
+    },
+    {
+      "id": "review",
+      "roleId": "reviewer",
+      "promptFile": "roles/reviewer.md"
+    }
+  ],
+  "edges": [
+    { "from": "research", "to": "review" }
+  ]
+}
