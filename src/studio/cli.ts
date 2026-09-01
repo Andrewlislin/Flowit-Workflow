@@ -8,6 +8,7 @@ import {
   installStudioForCurrentAgent,
   StudioRuntimeHandoffRequired,
 } from './consumer.js'
+import { createSkillHubStudioBundle } from './distribution.js'
 import type { StudioLicenseDocumentV1 } from './license.js'
 import {
   createStudioScaffold,
@@ -15,6 +16,7 @@ import {
   packStudioProject,
   validateStudioProject,
 } from './sdk.js'
+import { installSkillHubPayloadForCurrentAgent } from './skillhub-install.js'
 import { StudioTrustStore, type StudioPublisherTrustLevel } from './signing.js'
 import { StudioPackageStore } from './store.js'
 import { loadStudioPackage } from './validate.js'
@@ -27,8 +29,10 @@ export type StudioCliCommand =
   | 'validate'
   | 'test'
   | 'pack'
+  | 'skillhub'
   | 'list'
   | 'install'
+  | 'install-skillhub-payload'
 
 export interface StudioCliRuntime {
   readonly cwd?: string
@@ -106,50 +110,51 @@ export async function runStudioCli(
       )
       return
     }
-    case 'install': {
-      const target = positional(args, 1, 'studio install requires a package directory')
-      const publisherKeyFiles = options(args, 'publisher-key').map(value =>
-        path.resolve(cwd, value),
+    case 'skillhub': {
+      const target = positional(
+        args,
+        1,
+        'studio skillhub requires a Studio project/package directory',
       )
-      const trustStore = await loadTrustStore(publisherKeyFiles)
-      const licensePath = option(args, 'license')
-      const license = licensePath
-        ? (JSON.parse(
-            await readFile(path.resolve(cwd, licensePath), 'utf8'),
-          ) as StudioLicenseDocumentV1)
-        : undefined
-      const scope = option(args, 'scope') ?? 'user'
-      if (scope !== 'user' && scope !== 'project') {
-        throw new Error('--scope must be user or project')
-      }
+      const sourceRoot = path.resolve(cwd, target)
+      const outputDir = option(args, 'out')
+        ? path.resolve(cwd, option(args, 'out')!)
+        : defaultStudioArtifactOutputDir(cwd, sourceRoot, 'skillhub')
+      const result = await createSkillHubStudioBundle(sourceRoot, outputDir)
+      write(
+        stdout,
+        { generated: true, channel: 'skillhub', kind: 'data-only-payload', ...result },
+        json,
+      )
+      return
+    }
+    case 'install':
+    case 'install-skillhub-payload': {
+      const target = positional(
+        args,
+        1,
+        command === 'install'
+          ? 'studio install requires a package directory'
+          : 'studio install-skillhub-payload requires a payload directory',
+      )
+      const installInputs = await loadInstallInputs(args, cwd)
       try {
-        const result = await installStudioForCurrentAgent(
-          {
-            sourceRoot: path.resolve(cwd, target),
-            projectDir: path.resolve(cwd, option(args, 'project-dir') ?? '.'),
-            scope,
-            ...(option(args, 'host') ? { hostId: option(args, 'host')! } : {}),
-            ...(option(args, 'session') ? { sessionId: option(args, 'session')! } : {}),
-            ...(option(args, 'workspace')
-              ? { workspace: option(args, 'workspace')! }
-              : {}),
-            ...(option(args, 'source') ? { sourceLabel: option(args, 'source')! } : {}),
-            ...(option(args, 'handoff-digest')
-              ? { expectedSourceDigest: option(args, 'handoff-digest')! }
-              : {}),
-            ...(publisherKeyFiles.length ? { trustStore } : {}),
-            ...(license ? { license } : {}),
-            ...(args.includes('--allow-elevated') ? { allowElevated: true } : {}),
-            ...(option(args, 'store')
-              ? { storeRoot: path.resolve(cwd, option(args, 'store')!) }
-              : {}),
-          },
-          {
-            cwd,
-            ...(runtime.homeDir ? { homeDir: runtime.homeDir } : {}),
-            ...(runtime.env ? { env: runtime.env } : {}),
-          },
-        )
+        const result =
+          command === 'install'
+            ? await installStudioForCurrentAgent(
+                {
+                  sourceRoot: path.resolve(cwd, target),
+                  ...consumerInstallOptions(args, cwd, installInputs, true),
+                },
+                cliConsumerRuntime(runtime, cwd),
+              )
+            : await installSkillHubPayloadForCurrentAgent(
+                {
+                  payloadRoot: path.resolve(cwd, target),
+                  ...consumerInstallOptions(args, cwd, installInputs, false),
+                },
+                cliConsumerRuntime(runtime, cwd),
+              )
         write(stdout, result, json)
         return
       } catch (error: unknown) {
@@ -194,8 +199,68 @@ export async function runStudioCli(
     }
     default:
       throw new Error(
-        `unknown studio command ${String(command)}; expected init, inspect, validate, test, pack, install, or list`,
+        `unknown studio command ${String(command)}; expected init, inspect, validate, test, pack, skillhub, install, install-skillhub-payload, or list`,
       )
+  }
+}
+
+interface LoadedInstallInputs {
+  readonly publisherKeyFiles: readonly string[]
+  readonly trustStore: StudioTrustStore
+  readonly license?: StudioLicenseDocumentV1
+  readonly scope: 'user' | 'project'
+}
+
+async function loadInstallInputs(
+  args: readonly string[],
+  cwd: string,
+): Promise<LoadedInstallInputs> {
+  const publisherKeyFiles = options(args, 'publisher-key').map(value => path.resolve(cwd, value))
+  const trustStore = await loadTrustStore(publisherKeyFiles)
+  const licensePath = option(args, 'license')
+  const license = licensePath
+    ? (JSON.parse(await readFile(path.resolve(cwd, licensePath), 'utf8')) as StudioLicenseDocumentV1)
+    : undefined
+  const scope = option(args, 'scope') ?? 'user'
+  if (scope !== 'user' && scope !== 'project') throw new Error('--scope must be user or project')
+  return {
+    publisherKeyFiles,
+    trustStore,
+    ...(license ? { license } : {}),
+    scope,
+  }
+}
+
+function consumerInstallOptions(
+  args: readonly string[],
+  cwd: string,
+  inputs: LoadedInstallInputs,
+  includeInternalContinuation: boolean,
+) {
+  return {
+    projectDir: path.resolve(cwd, option(args, 'project-dir') ?? '.'),
+    scope: inputs.scope,
+    ...(option(args, 'host') ? { hostId: option(args, 'host')! } : {}),
+    ...(option(args, 'session') ? { sessionId: option(args, 'session')! } : {}),
+    ...(option(args, 'workspace') ? { workspace: option(args, 'workspace')! } : {}),
+    ...(includeInternalContinuation && option(args, 'source')
+      ? { sourceLabel: option(args, 'source')! }
+      : {}),
+    ...(includeInternalContinuation && option(args, 'handoff-digest')
+      ? { expectedSourceDigest: option(args, 'handoff-digest')! }
+      : {}),
+    ...(inputs.publisherKeyFiles.length ? { trustStore: inputs.trustStore } : {}),
+    ...(inputs.license ? { license: inputs.license } : {}),
+    ...(args.includes('--allow-elevated') ? { allowElevated: true } : {}),
+    ...(option(args, 'store') ? { storeRoot: path.resolve(cwd, option(args, 'store')!) } : {}),
+  }
+}
+
+function cliConsumerRuntime(runtime: StudioCliRuntime, cwd: string) {
+  return {
+    cwd,
+    ...(runtime.homeDir ? { homeDir: runtime.homeDir } : {}),
+    ...(runtime.env ? { env: runtime.env } : {}),
   }
 }
 
@@ -203,16 +268,17 @@ export function createRuntimeHandoffArgs(
   args: readonly string[],
   handoff: StudioRuntimeHandoffRequired,
 ): string[] {
-  const withoutInternal = removeOptions(args, new Set(['handoff-digest', 'source']))
-  if (withoutInternal[0] !== 'install') {
-    throw new Error('Studio runtime handoff is valid only for the install command')
+  if (args[0] !== 'install' && args[0] !== 'install-skillhub-payload') {
+    throw new Error('Studio runtime handoff is valid only for an install command')
   }
-  if (withoutInternal.length < 2) throw new Error('Studio runtime handoff has no install target')
-  const result = [...withoutInternal]
-  result[1] = handoff.snapshot.snapshotDir
-  result.push(`--handoff-digest=${handoff.snapshot.digest}`)
-  result.push(`--source=${handoff.sourceLabel}`)
-  return result
+  const forwarded = removeOptions(args.slice(2), new Set(['handoff-digest', 'source']))
+  return [
+    'install',
+    handoff.snapshot.snapshotDir,
+    ...forwarded,
+    `--handoff-digest=${handoff.snapshot.digest}`,
+    `--source=${handoff.sourceLabel}`,
+  ]
 }
 
 async function loadTrustStore(files: readonly string[]): Promise<StudioTrustStore> {
