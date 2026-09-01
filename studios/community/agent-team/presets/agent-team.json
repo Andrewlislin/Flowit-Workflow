@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "id": "agent-team",
+  "displayName": "AI 项目小组",
+  "description": "规划 → 调研 → 执行 → Review。",
+  "input": { "required": true, "label": "项目目标 / 任务说明" },
+  "roles": [
+    { "id": "planner", "displayName": "规划", "description": "把目标拆成有边界的执行计划和验收标准。" },
+    { "id": "researcher", "displayName": "调研", "description": "收集安全执行计划所需要的信息、约束和依据。" },
+    { "id": "executor", "displayName": "执行", "description": "按照计划和证据完成主要工作。" },
+    { "id": "reviewer", "displayName": "Review", "description": "按验收标准检查结果并指出剩余风险。" }
+  ],
+  "nodes": [
+    { "id": "planner", "roleId": "planner", "promptFile": "roles/planner.md", "inheritUpstreamContext": false },
+    { "id": "researcher", "roleId": "researcher", "promptFile": "roles/researcher.md" },
+    { "id": "executor", "roleId": "executor", "promptFile": "roles/executor.md" },
+    { "id": "reviewer", "roleId": "reviewer", "promptFile": "roles/reviewer.md" }
+  ],
+  "edges": [
+    { "from": "planner", "to": "researcher" },
+    { "from": "researcher", "to": "executor" },
+    { "from": "executor", "to": "reviewer" }
+  ]
+}

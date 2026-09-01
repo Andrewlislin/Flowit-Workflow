@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "coaseedge.research-lab",
+  "displayName": "深度研究",
+  "description": "规划问题 → 搜证据 → 找反例 → 综合 → 审核。",
+  "publisher": { "id": "coaseedge", "displayName": "CoaseEdge / 高斯边界" },
+  "version": "1.0.0",
+  "runtime": { "id": "flowit-workflow", "version": ">=0.5.0-beta.2 <2", "bootstrap": "official" },
+  "supportedHosts": ["workbuddy", "claude-code", "codex", "opencode", "dsh", "doubao-office"],
+  "entryPreset": "research-lab",
+  "license": { "type": "open-source", "notice": "Community Studio distributed under the repository Apache-2.0 license." },
+  "metadata": { "channel": "community", "legacyPresetId": "research-lab" }
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "id": "content-studio",
+  "displayName": "内容工作室",
+  "description": "发现热点 → 选择题目 → 研究资料 → 写作 → 查事实 → 主编审核。",
+  "input": { "required": false, "label": "内容主题 / 目标受众说明" },
+  "roles": [
+    { "id": "radar", "displayName": "发现热点", "description": "扫描当前信号并形成带来源的候选选题。" },
+    { "id": "strategist", "displayName": "选择题目", "description": "按统一标准评估候选选题并确定差异化角度。" },
+    { "id": "researcher", "displayName": "研究资料", "description": "建立证据包，包含一手来源、反方证据与不确定性。" },
+    { "id": "writer", "displayName": "写作", "description": "把选定角度和证据整理成结构化文章草稿。" },
+    { "id": "fact-checker", "displayName": "查事实", "description": "核查事实性陈述并纠正缺乏依据或过度表达的内容。" },
+    { "id": "editor", "displayName": "主编审核", "description": "形成最终稿和标题选项，但不自动发布。" }
+  ],
+  "nodes": [
+    { "id": "radar", "roleId": "radar", "promptFile": "roles/radar.md", "inheritUpstreamContext": false },
+    { "id": "strategist", "roleId": "strategist", "promptFile": "roles/strategist.md" },
+    { "id": "researcher", "roleId": "researcher", "promptFile": "roles/researcher.md" },
+    { "id": "writer", "roleId": "writer", "promptFile": "roles/writer.md" },
+    { "id": "fact-checker", "roleId": "fact-checker", "promptFile": "roles/fact-checker.md" },
+    { "id": "editor", "roleId": "editor", "promptFile": "roles/editor.md" }
+  ],
+  "edges": [
+    { "from": "radar", "to": "strategist" },
+    { "from": "strategist", "to": "researcher" },
+    { "from": "researcher", "to": "writer" },
+    { "from": "writer", "to": "fact-checker" },
+    { "from": "fact-checker", "to": "editor" }
+  ]
+}
