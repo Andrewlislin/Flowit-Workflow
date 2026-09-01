@@ -3,13 +3,24 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { fileURLToPath } from 'node:url'
 import { executeControl } from './control.js'
+import { AgentExecutionError } from './core/index.js'
 import type {
   AgentExecutionRequirement,
   AutomationTarget,
   CreatePipelineInput,
   CreateScheduleInput,
 } from './core/types.js'
-import type { ExplicitRunOnceInput } from './explicit-run-once.js'
+import {
+  createExecutionGrantServiceFromEnvironment,
+  permissionApprovalMessage,
+  permissionEnvelopeForPlan,
+  requiresInteractivePermissionApproval,
+} from './execution-grant.js'
+import type {
+  ExplicitRunOnceInput,
+  ExplicitRunOncePlan,
+} from './explicit-run-once.js'
+import { McpPeer } from './mcp/peer.js'
 import { createConfiguredRuntime, requireBuiltInAdapterId } from './runtime-factory.js'
 import {
   commitPreparedWorkflow,
@@ -23,10 +34,12 @@ import {
 } from './routing/index.js'
 
 interface JsonRpcRequest {
-  jsonrpc: '2.0'
+  jsonrpc?: '2.0'
   id?: string | number
-  method: string
+  method?: string
   params?: Record<string, unknown>
+  result?: unknown
+  error?: unknown
 }
 
 const mutationsEnabled =
@@ -43,7 +56,13 @@ const callerAttestationRequired =
   process.env.FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION?.trim() !== '0'
 const core = createConfiguredRuntime({ activeWorkers: false, defaultAdapterId: adapterId })
 const routingAuthority = createRoutingAuthorityFromEnvironment()
+const executionGrants = createExecutionGrantServiceFromEnvironment()
+const peer = new McpPeer(send, {
+  idPrefix: 'flowit:elicitation',
+  defaultTimeoutMs: 120_000,
+})
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
+let clientSupportsElicitation = false
 
 rl.on('line', line => {
   void handle(line).catch(error =>
@@ -58,22 +77,32 @@ process.once('beforeExit', () => void core.dispose())
 
 async function handle(line: string): Promise<void> {
   if (!line.trim()) return
-  const request = JSON.parse(line) as JsonRpcRequest
-  if (request.id === undefined) return
+  const message = JSON.parse(line) as JsonRpcRequest
+  if (peer.acceptResponse(message)) return
+  if (message.id === undefined || typeof message.method !== 'string') return
   try {
-    send({ jsonrpc: '2.0', id: request.id, result: await dispatch(request) })
+    send({ jsonrpc: '2.0', id: message.id, result: await dispatch(message) })
   } catch (error: unknown) {
     send({
       jsonrpc: '2.0',
-      id: request.id,
-      error: { code: -32000, message: error instanceof Error ? error.message : String(error) },
+      id: message.id,
+      error: {
+        code: -32000,
+        message: error instanceof Error ? error.message : String(error),
+      },
     })
   }
 }
 
 async function dispatch(request: JsonRpcRequest): Promise<unknown> {
   switch (request.method) {
-    case 'initialize':
+    case 'initialize': {
+      const capabilities = isRecord(request.params?.capabilities)
+        ? request.params.capabilities
+        : {}
+      clientSupportsElicitation =
+        capabilities.elicitation === true ||
+        isRecord(capabilities.elicitation)
       return {
         protocolVersion:
           typeof request.params?.protocolVersion === 'string'
@@ -82,6 +111,7 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
         capabilities: { tools: {} },
         serverInfo: { name: 'flowit-workflow', version: '0.5.0-beta.3' },
       }
+    }
     case 'ping':
       return {}
     case 'tools/list':
@@ -97,11 +127,14 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
       await core.ready
       const args = (request.params?.arguments ?? {}) as Record<string, unknown>
       return {
-        content: [{ type: 'text', text: JSON.stringify(await call(name, args), null, 2) }],
+        content: [{
+          type: 'text',
+          text: JSON.stringify(await call(name, args), null, 2),
+        }],
       }
     }
     default:
-      throw new Error(`unsupported MCP method ${request.method}`)
+      throw new Error(`unsupported MCP method ${String(request.method)}`)
   }
 }
 
@@ -128,7 +161,10 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
     case 'dispatch':
       return executeControl(
         core,
-        { op: 'dispatch', target: object(args.target, 'target') as unknown as AutomationTarget },
+        {
+          op: 'dispatch',
+          target: object(args.target, 'target') as unknown as AutomationTarget,
+        },
         routingAuthority,
       )
     case 'schedule_list':
@@ -205,13 +241,19 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
         },
       )
     }
-    case 'run_once_start':
+    case 'run_once_start': {
       assertExplicitRunOnceHost('run_once_start')
+      const input = explicitRunOnceInput(args)
       return executeControl(
         core,
-        { op: 'run-once.start', input: explicitRunOnceInput(args) },
+        {
+          op: 'run-once.start',
+          input,
+          options: { approvalProvider: approveExplicitRunOnce },
+        },
         routingAuthority,
       )
+    }
     case 'run_once_get':
       assertExplicitRunOnceHost('run_once_get')
       return executeControl(
@@ -230,6 +272,61 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
     default:
       throw new Error(`unknown Flowit Workflow MCP tool ${name}`)
   }
+}
+
+async function approveExplicitRunOnce(
+  plan: ExplicitRunOncePlan,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (executionGrants.findValidPlanGrant(plan)) return
+  const envelope = permissionEnvelopeForPlan(plan)
+  if (!requiresInteractivePermissionApproval(envelope)) {
+    executionGrants.issuePlanGrant(plan, 'bounded-readonly-default')
+    return
+  }
+  if (!clientSupportsElicitation) {
+    throw new AgentExecutionError(
+      'PERMISSION_UNAVAILABLE',
+      'The current MCP Host does not advertise elicitation support required to approve network or workspace-write access. No Session or Run was created.',
+      false,
+    )
+  }
+  const response = await peer.request(
+    'elicitation/create',
+    {
+      message: permissionApprovalMessage(plan, envelope),
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          approve: {
+            type: 'boolean',
+            title: '批准本次运行',
+            description:
+              'Approve exactly the displayed working directory, network setting, Skills, and bounded Flowit run-once input.',
+          },
+        },
+        required: ['approve'],
+      },
+    },
+    signal,
+    120_000,
+  )
+  if (!isRecord(response)) {
+    throw new AgentExecutionError(
+      'PERMISSION_UNAVAILABLE',
+      'The MCP Host returned an invalid permission elicitation response. No Session or Run was created.',
+      false,
+    )
+  }
+  const content = isRecord(response.content) ? response.content : {}
+  if (response.action !== 'accept' || content.approve !== true) {
+    throw new AgentExecutionError(
+      'PERMISSION_UNAVAILABLE',
+      `The user ${response.action === 'cancel' ? 'cancelled' : 'declined'} the Flowit execution permission request. No Session or Run was created.`,
+      false,
+    )
+  }
+  executionGrants.issuePlanGrant(plan, 'mcp-elicitation')
 }
 
 function callerContextFor(
@@ -295,8 +392,10 @@ function assessmentInput(args: Record<string, unknown>): TaskAssessmentRequest {
 function explicitRunOnceInput(
   args: Record<string, unknown>,
 ): ExplicitRunOnceInput {
+  assertOnlyKeys(args, ['requestId', 'name', 'goal', 'target', 'steps'], 'run_once_start')
   const rawTarget = object(args.target, 'target')
-  const execution = parseExecutionRequirement(rawTarget.execution)
+  assertOnlyKeys(rawTarget, ['dedicatedCwd', 'skills', 'execution'], 'target')
+  const execution = parseExecutionRequirement(rawTarget.execution, true)
   const rawSteps = args.steps
   if (!Array.isArray(rawSteps)) throw new Error('steps must be an array')
   return {
@@ -313,6 +412,7 @@ function explicitRunOnceInput(
     },
     steps: rawSteps.map((value, index) => {
       const step = object(value, `steps[${index}]`)
+      assertOnlyKeys(step, ['id', 'prompt'], `steps[${index}]`)
       return {
         id: string(step.id, `steps[${index}].id`),
         prompt: string(step.prompt, `steps[${index}].prompt`),
@@ -328,7 +428,7 @@ function prepareInput(args: Record<string, unknown>): PrepareWorkflowInput {
   if (Boolean(sessionId) === Boolean(dedicatedCwd)) {
     throw new Error('target must specify exactly one of sessionId or dedicatedCwd')
   }
-  const execution = parseExecutionRequirement(rawTarget.execution)
+  const execution = parseExecutionRequirement(rawTarget.execution, false)
   const target: WorkflowTargetBinding = {
     adapterId: string(rawTarget.adapterId, 'target.adapterId'),
     ...(sessionId ? { sessionId } : {}),
@@ -348,14 +448,27 @@ function prepareInput(args: Record<string, unknown>): PrepareWorkflowInput {
   }
 }
 
-function parseExecutionRequirement(value: unknown): AgentExecutionRequirement | undefined {
+function parseExecutionRequirement(
+  value: unknown,
+  explicitRunOnce: boolean,
+): AgentExecutionRequirement | undefined {
   if (value === undefined) return undefined
   const raw = object(value, 'target.execution')
+  assertOnlyKeys(
+    raw,
+    ['runtime', 'requiredCapabilities'],
+    'target.execution',
+  )
   const runtimeRaw = raw.runtime === undefined
     ? undefined
     : object(raw.runtime, 'target.execution.runtime')
   let runtime: AgentExecutionRequirement['runtime']
   if (runtimeRaw) {
+    assertOnlyKeys(
+      runtimeRaw,
+      ['model', 'reasoningEffort', 'match'],
+      'target.execution.runtime',
+    )
     const match = string(runtimeRaw.match, 'target.execution.runtime.match')
     if (match !== 'inherit' && match !== 'exact' && match !== 'preferred') {
       throw new Error('target.execution.runtime.match must be inherit, exact, or preferred')
@@ -374,6 +487,18 @@ function parseExecutionRequirement(value: unknown): AgentExecutionRequirement | 
         raw.requiredCapabilities,
         'target.execution.requiredCapabilities',
       ) as NonNullable<AgentExecutionRequirement['requiredCapabilities']>
+  if (
+    explicitRunOnce &&
+    requiredCapabilities?.some(capability =>
+      capability !== 'workspace-read' &&
+      capability !== 'workspace-write' &&
+      capability !== 'network'
+    )
+  ) {
+    throw new Error(
+      'explicit run-once requiredCapabilities support only workspace-read, workspace-write, and network',
+    )
+  }
   return {
     ...(runtime ? { runtime } : {}),
     ...(requiredCapabilities ? { requiredCapabilities } : {}),
@@ -481,7 +606,17 @@ function tools(): unknown[] {
       skills: { type: 'array', items: { type: 'string' } },
     },
   }
-  const explicitRunOnceExecution = obj({ runtime })
+  const explicitRunOnceExecution = obj({
+    runtime,
+    requiredCapabilities: {
+      type: 'array',
+      uniqueItems: true,
+      items: {
+        type: 'string',
+        enum: ['workspace-read', 'workspace-write', 'network'],
+      },
+    },
+  })
   const explicitRunOnceTarget = obj(
     {
       dedicatedCwd: {
@@ -617,7 +752,7 @@ function tools(): unknown[] {
         {
           name: 'run_once_start',
           description:
-            'Start an explicit 浮域 (Flowit Workflow) 2-6 stage run-once workflow in a new, clean, dedicated Codex Session. This is a mutation under Host-native approval, not adaptive routing authority. Reuse the exact requestId for retries; the same requestId cannot be rebound to different input.',
+            'Start an explicit 浮域 (Flowit Workflow) 2-6 stage run-once workflow in a new, clean, dedicated Codex Session. Network or workspace-write capabilities require exact MCP user approval before any Host or workflow mutation. Reuse the same requestId for retries; it cannot be rebound to different input.',
           inputSchema: obj(
             {
               requestId: { type: 'string', minLength: 1, maxLength: 256 },
@@ -674,6 +809,18 @@ function isMutation(name: string): boolean {
   ]).has(name)
 }
 
+function assertOnlyKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  name: string,
+): void {
+  const set = new Set(allowed)
+  const unknown = Object.keys(value).filter(key => !set.has(key))
+  if (unknown.length > 0) {
+    throw new Error(`${name} contains unsupported fields: ${unknown.join(', ')}`)
+  }
+}
+
 function string(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) {
     throw new Error(`${name} must be a non-empty string`)
@@ -705,11 +852,16 @@ function object(value: unknown, name: string): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+function isRecord(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 function send(message: unknown): void {
   process.stdout.write(`${JSON.stringify(message)}\n`)
 }
 
 async function shutdown(): Promise<void> {
+  peer.dispose(new Error('Flowit MCP server is shutting down'))
   await core.dispose()
   process.exit(0)
 }
