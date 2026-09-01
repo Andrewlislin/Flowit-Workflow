@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "id": "research-lab",
+  "displayName": "深度研究",
+  "description": "规划问题 → 搜证据 → 找反例 → 综合 → 审核。",
+  "input": { "required": true, "label": "研究问题" },
+  "roles": [
+    { "id": "planner", "displayName": "规划问题", "description": "明确研究问题、范围、证据标准与研究计划。" },
+    { "id": "researcher", "displayName": "搜证据", "description": "收集一手证据和结构化的二手资料。" },
+    { "id": "skeptic", "displayName": "找反例", "description": "主动寻找反方证据、替代解释与薄弱假设。" },
+    { "id": "synthesizer", "displayName": "综合", "description": "综合证据并按可信度形成结论。" },
+    { "id": "reviewer", "displayName": "审核", "description": "检查来源可追溯性、不确定性和报告质量。" }
+  ],
+  "nodes": [
+    { "id": "planner", "roleId": "planner", "promptFile": "roles/planner.md", "inheritUpstreamContext": false },
+    { "id": "researcher", "roleId": "researcher", "promptFile": "roles/researcher.md" },
+    { "id": "skeptic", "roleId": "skeptic", "promptFile": "roles/skeptic.md" },
+    { "id": "synthesizer", "roleId": "synthesizer", "promptFile": "roles/synthesizer.md" },
+    { "id": "reviewer", "roleId": "reviewer", "promptFile": "roles/reviewer.md" }
+  ],
+  "edges": [
+    { "from": "planner", "to": "researcher" },
+    { "from": "researcher", "to": "skeptic" },
+    { "from": "skeptic", "to": "synthesizer" },
+    { "from": "synthesizer", "to": "reviewer" }
+  ]
+}

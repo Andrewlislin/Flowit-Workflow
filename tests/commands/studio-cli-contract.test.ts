@@ -6,12 +6,14 @@ test('package exposes the Studio SDK and dedicated Studio CLI entrypoint', async
   const manifest = JSON.parse(await readFile('package.json', 'utf8')) as {
     exports?: Record<string, { types?: string; default?: string }>
     bin?: Record<string, string>
+    files?: string[]
   }
   assert.deepEqual(manifest.exports?.['./studio'], {
     types: './dist/studio/index.d.ts',
     default: './dist/studio/index.js',
   })
   assert.equal(manifest.bin?.['flowit-studio'], 'dist/studio/cli-entry.js')
+  assert.ok(manifest.files?.includes('studios'), 'Community Studio assets must ship with the CLI')
 })
 
 test('Studio CLI entry delegates argv to the reviewed Studio command dispatcher', async () => {
