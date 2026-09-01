@@ -33,6 +33,8 @@ manual-action-required → 明确告诉用户仍需完成 Host 信任步骤
 partial / unhealthy → 要求 Repair
 ```
 
+Host Setup 的状态聚合是 fail-closed 的：`partial`、`failed`、`unsupported` 都会把 Studio install 归为 `partial`，即使随后 Doctor 返回 `healthy` 也不能提升成 `complete`。这类结果在 first-run 中是 `repair-required`，diagnostics 归因到 `host-setup`，且不会记录 `host_setup_success` 或 `studio_install_success`。
+
 Runtime handoff 不是一次新的外部安装请求。旧 Runtime 在 child 结束前保留 frozen snapshot；compatible child 接收该 snapshot 路径和预期 digest，并再次校验 byte identity。即使原下载目录在 handoff 期间被替换，安装仍只能继续最初冻结的 bytes。
 
 用户已经明确选择“安装这个工作室”以后，标准依赖树不再重复询问“是否安装浮域”。管理员权限、外部发布、生产部署、删除数据以及 Studio 声明的 `elevated` 权限仍然必须单独批准；Host 自己的 workspace trust、MCP approval、Plugin trust、原生 Automation 等边界也保持不变。
