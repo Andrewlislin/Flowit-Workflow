@@ -42,7 +42,7 @@ A non-empty target directory is never overwritten implicitly. Use `--force` only
 | `flowit-studio skillhub <dir>` | Produce a data-only SkillHub payload |
 | `flowit-studio list` | List locally installed Studios |
 | `flowit-studio install <dir>` | Enter the consumer Package / Runtime / host installation chain |
-| `flowit-studio install-skillhub-payload <dir>` | Install from a frozen and checked SkillHub payload |
+| `flowit-studio install-skillhub-payload <dir>` | Freeze an external SkillHub payload into a Flowit-owned snapshot, then enter the installation chain |
 | `flowit-studio experience-report` | Read the local installation-experience aggregate |
 
 Installation involves publisher trust, licensing, host scope and possible runtime handoff. It is not ordinary file copying. See [Installation and runtime bootstrap](install.en.md).
