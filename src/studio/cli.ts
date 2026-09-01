@@ -7,7 +7,9 @@ import { promisify } from 'node:util'
 import {
   installStudioForCurrentAgent,
   StudioRuntimeHandoffRequired,
+  type AppliedConsumerStudioInstall,
 } from './consumer.js'
+import { readStudioExperienceReport } from './diagnostics.js'
 import { createSkillHubStudioBundle } from './distribution.js'
 import type { StudioLicenseDocumentV1 } from './license.js'
 import {
@@ -33,6 +35,7 @@ export type StudioCliCommand =
   | 'list'
   | 'install'
   | 'install-skillhub-payload'
+  | 'experience-report'
 
 export interface StudioCliRuntime {
   readonly cwd?: string
@@ -79,11 +82,7 @@ export async function runStudioCli(
     }
     case 'validate':
     case 'test': {
-      const target = positional(
-        args,
-        1,
-        `studio ${command} requires a package directory`,
-      )
+      const target = positional(args, 1, `studio ${command} requires a package directory`)
       const result = await validateStudioProject(path.resolve(cwd, target))
       write(
         stdout,
@@ -155,7 +154,8 @@ export async function runStudioCli(
                 },
                 cliConsumerRuntime(runtime, cwd),
               )
-        write(stdout, result, json)
+        if (json) write(stdout, result, true)
+        else writeInstallResult(stdout, result)
         return
       } catch (error: unknown) {
         if (!(error instanceof StudioRuntimeHandoffRequired)) throw error
@@ -179,6 +179,14 @@ export async function runStudioCli(
         }
       }
     }
+    case 'experience-report': {
+      const report = await readStudioExperienceReport({
+        ...(runtime.homeDir ? { homeDir: runtime.homeDir } : {}),
+        ...(option(args, 'file') ? { file: path.resolve(cwd, option(args, 'file')!) } : {}),
+      })
+      write(stdout, report, json)
+      return
+    }
     case 'list': {
       const rootDir =
         option(args, 'store') ??
@@ -199,7 +207,7 @@ export async function runStudioCli(
     }
     default:
       throw new Error(
-        `unknown studio command ${String(command)}; expected init, inspect, validate, test, pack, skillhub, install, install-skillhub-payload, or list`,
+        `unknown studio command ${String(command)}; expected init, inspect, validate, test, pack, skillhub, install, install-skillhub-payload, experience-report, or list`,
       )
   }
 }
@@ -261,6 +269,7 @@ function cliConsumerRuntime(runtime: StudioCliRuntime, cwd: string) {
     cwd,
     ...(runtime.homeDir ? { homeDir: runtime.homeDir } : {}),
     ...(runtime.env ? { env: runtime.env } : {}),
+    ...(runtime.homeDir ? { diagnostics: { homeDir: runtime.homeDir } } : {}),
   }
 }
 
@@ -295,6 +304,30 @@ async function loadTrustStore(files: readonly string[]): Promise<StudioTrustStor
     store.add({ publisherId, keyId, publicKey, trust })
   }
   return store
+}
+
+function writeInstallResult(stdout: Writable, result: AppliedConsumerStudioInstall): void {
+  stdout.write(`${result.firstRun.message}\n`)
+  stdout.write(`Host: ${result.context.hostId}\n`)
+  stdout.write(`Install status: ${result.transaction.status}\n`)
+  if (result.transaction.trust.status !== 'unsigned') {
+    stdout.write(`Publisher trust: ${result.transaction.trust.status}\n`)
+  }
+  for (const warning of result.transaction.warnings) stdout.write(`! ${warning}\n`)
+  if (result.firstRun.manualSteps.length) {
+    stdout.write('还需要完成当前 Agent 自己要求的步骤：\n')
+    for (const step of result.firstRun.manualSteps) stdout.write(`- ${step}\n`)
+  }
+  if (result.firstRun.state === 'installation-complete') {
+    stdout.write(`Entry preset: ${result.firstRun.entryPresetId}\n`)
+    stdout.write(
+      '当前版本没有通用的 installed-Studio run/activate 命令；安装成功不等于已经具备直接执行入口。\n',
+    )
+  } else if (result.firstRun.state === 'pending-manual-action') {
+    stdout.write('完成上述宿主信任/手动步骤后，安装状态才能视为完成。\n')
+  } else {
+    stdout.write('请先运行 Doctor/Repair 或处理上述错误，再继续使用这个工作室。\n')
+  }
 }
 
 function removeOptions(args: readonly string[], names: ReadonlySet<string>): string[] {

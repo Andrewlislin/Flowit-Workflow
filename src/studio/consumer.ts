@@ -7,6 +7,12 @@ import {
 } from './bootstrap.js'
 import { resolveCurrentAgentContext, type CurrentAgentContext } from './context.js'
 import {
+  bestEffortRecordStudioExperience,
+  type StudioExperienceFailureStage,
+  type StudioExperienceRecorderOptions,
+} from './diagnostics.js'
+import { createStudioFirstRunGuide, type StudioFirstRunGuide } from './first-run.js'
+import {
   applyStudioInstallTransaction,
   prepareStudioInstallTransaction,
   type AppliedStudioInstallTransaction,
@@ -44,6 +50,8 @@ export interface ConsumerStudioInstallOptions {
 export interface ConsumerStudioInstallRuntime extends HostSetupContextOptions {
   readonly setupRegistry?: HostSetupRegistry
   readonly bootstrap?: OfficialRuntimeResolverOptions
+  readonly diagnostics?: StudioExperienceRecorderOptions
+  readonly now?: () => Date
 }
 
 export interface PreparedConsumerStudioInstall {
@@ -54,6 +62,7 @@ export interface PreparedConsumerStudioInstall {
 export interface AppliedConsumerStudioInstall {
   readonly context: CurrentAgentContext
   readonly transaction: AppliedStudioInstallTransaction
+  readonly firstRun: StudioFirstRunGuide
 }
 
 export class StudioRuntimeHandoffRequired extends Error {
@@ -102,9 +111,6 @@ export async function prepareStudioForCurrentAgent(
       path.join(runtime.homeDir ?? os.homedir(), '.flowit-workflow', 'studios'),
   })
 
-  // Freeze publisher-controlled bytes before runtime/Host decisions. If a compatible
-  // runtime handoff is required, this exact snapshot remains alive until the child
-  // finishes and is passed as the child install source with its digest as a fence.
   const preflightSnapshot = await packageStore.stageFromDirectory(options.sourceRoot)
   let handoff: StudioRuntimeHandoffRequired | undefined
   try {
@@ -122,6 +128,7 @@ export async function prepareStudioForCurrentAgent(
     const intent = createStudioInstallIntent({
       studioId: manifest.id,
       source: sourceLabel,
+      ...(runtime.now ? { now: runtime.now } : {}),
     })
 
     const currentVersion = await currentFlowitPackageVersion()
@@ -166,6 +173,7 @@ export async function prepareStudioForCurrentAgent(
         intent,
         ...(options.trustStore ? { trustStore: options.trustStore } : {}),
         ...(options.license ? { license: options.license } : {}),
+        ...(runtime.now ? { now: runtime.now() } : {}),
       },
       setupContext,
       setupRegistry,
@@ -187,23 +195,120 @@ export async function installStudioForCurrentAgent(
   options: ConsumerStudioInstallOptions,
   runtime: ConsumerStudioInstallRuntime = {},
 ): Promise<AppliedConsumerStudioInstall> {
+  const startedAt = Date.now()
+  const now = runtime.now ?? (() => new Date())
+  const diagnostics = runtime.diagnostics ?? {}
   const setupContext = createHostSetupContext(runtime)
   const setupRegistry = runtime.setupRegistry ?? createDefaultHostSetupRegistry()
-  const prepared = await prepareStudioForCurrentAgent(options, {
-    ...runtime,
-    setupRegistry,
-  })
+  let prepared: PreparedConsumerStudioInstall
+
+  try {
+    prepared = await prepareStudioForCurrentAgent(options, { ...runtime, setupRegistry })
+  } catch (error: unknown) {
+    if (error instanceof StudioRuntimeHandoffRequired) {
+      await bestEffortRecordStudioExperience(
+        {
+          version: 1,
+          event: 'runtime_bootstrap_success',
+          at: now().toISOString(),
+          studioId: error.snapshot.manifest.id,
+          studioVersion: error.snapshot.manifest.version,
+          durationMs: Date.now() - startedAt,
+        },
+        diagnostics,
+      )
+      throw error
+    }
+    await bestEffortRecordStudioExperience(
+      {
+        version: 1,
+        event: 'studio_install_failed',
+        at: now().toISOString(),
+        durationMs: Date.now() - startedAt,
+        failureStage: 'preflight',
+      },
+      diagnostics,
+    )
+    throw error
+  }
+
   const packageStore = new StudioPackageStore({
     rootDir:
       options.storeRoot ??
       path.join(runtime.homeDir ?? os.homedir(), '.flowit-workflow', 'studios'),
   })
-  const transaction = await applyStudioInstallTransaction(
-    prepared.transaction,
-    setupContext,
-    setupRegistry,
-    packageStore,
-    { ...(options.allowElevated ? { allowElevated: true } : {}) },
+  try {
+    const transaction = await applyStudioInstallTransaction(
+      prepared.transaction,
+      setupContext,
+      setupRegistry,
+      packageStore,
+      { ...(options.allowElevated ? { allowElevated: true } : {}) },
+    )
+    const common = {
+      version: 1 as const,
+      at: now().toISOString(),
+      studioId: transaction.studioId,
+      studioVersion: transaction.version,
+      hostId: prepared.context.hostId,
+      durationMs: Date.now() - startedAt,
+    }
+    if (transaction.status === 'complete') {
+      await bestEffortRecordStudioExperience(
+        { ...common, event: 'host_setup_success' },
+        diagnostics,
+      )
+      await bestEffortRecordStudioExperience(
+        { ...common, event: 'studio_install_success' },
+        diagnostics,
+      )
+    } else if (transaction.status === 'manual-action-required') {
+      await bestEffortRecordStudioExperience(
+        { ...common, event: 'studio_install_pending_manual' },
+        diagnostics,
+      )
+    } else {
+      await bestEffortRecordStudioExperience(
+        {
+          ...common,
+          event: 'studio_install_failed',
+          failureStage: failureStageForResult(transaction),
+        },
+        diagnostics,
+      )
+    }
+    return {
+      context: prepared.context,
+      transaction,
+      firstRun: createStudioFirstRunGuide(transaction.installed.manifest, transaction),
+    }
+  } catch (error: unknown) {
+    await bestEffortRecordStudioExperience(
+      {
+        version: 1,
+        event: 'studio_install_failed',
+        at: now().toISOString(),
+        studioId: prepared.transaction.snapshot.manifest.id,
+        studioVersion: prepared.transaction.snapshot.manifest.version,
+        hostId: prepared.context.hostId,
+        durationMs: Date.now() - startedAt,
+        failureStage:
+          error instanceof Error && /host integration failed/i.test(error.message)
+            ? 'host-setup'
+            : 'package-install',
+      },
+      diagnostics,
+    )
+    throw error
+  }
+}
+
+function failureStageForResult(
+  transaction: AppliedStudioInstallTransaction,
+): StudioExperienceFailureStage {
+  return transaction.hostSetup.results.some(
+    result => result.status === 'failed' || result.status === 'unsupported',
   )
-  return { context: prepared.context, transaction }
+    ? 'host-setup'
+    : 'doctor'
 }
