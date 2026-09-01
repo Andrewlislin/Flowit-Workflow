@@ -7,6 +7,7 @@ import {
 } from './core/domain.js'
 import type {
   AgentAdapter,
+  AgentExecutionCapability,
   AgentExecutionEvidence,
   AgentExecutionPreflightRequest,
   AgentExecutionRequirement,
@@ -28,6 +29,11 @@ const MAX_NAME_LENGTH = 200
 const MAX_GOAL_LENGTH = 100_000
 const MAX_PROMPT_LENGTH = 100_000
 const STEP_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
+const EXPLICIT_CAPABILITIES = new Set<AgentExecutionCapability>([
+  'workspace-read',
+  'workspace-write',
+  'network',
+])
 
 export interface ExplicitRunOnceStepInput {
   readonly id: string
@@ -58,7 +64,8 @@ export interface NormalizedExplicitRunOnceInput {
     readonly dedicatedCwd: string
     readonly skills: readonly string[]
     readonly execution?: {
-      readonly runtime: AgentRuntimeRequirement
+      readonly runtime?: AgentRuntimeRequirement
+      readonly requiredCapabilities?: readonly AgentExecutionCapability[]
     }
   }
   readonly steps: readonly ExplicitRunOnceStepInput[]
@@ -74,6 +81,15 @@ export interface ExplicitRunOncePlan {
   readonly placeholderSessionId: string
   readonly preflight: AgentExecutionPreflightRequest
   readonly snapshot: RunOncePipelineSnapshot
+}
+
+export type ExplicitRunOnceApprovalProvider = (
+  plan: ExplicitRunOncePlan,
+  signal?: AbortSignal,
+) => Promise<void>
+
+export interface ExplicitRunOnceStartOptions {
+  readonly approvalProvider?: ExplicitRunOnceApprovalProvider
 }
 
 export interface ExplicitRunOnceStartResult {
@@ -179,6 +195,7 @@ export function planExplicitRunOnce(input: ExplicitRunOnceInput): ExplicitRunOnc
 export async function startExplicitRunOnce(
   core: FlowitOrchestrationCore,
   input: ExplicitRunOnceInput,
+  options: ExplicitRunOnceStartOptions = {},
   signal?: AbortSignal,
 ): Promise<ExplicitRunOnceStartResult> {
   await core.ready
@@ -186,6 +203,17 @@ export async function startExplicitRunOnce(
   const plan = planExplicitRunOnce(input)
   const existing = await findExistingState(core, plan)
   if (existing) return continueExisting(core, plan, existing, signal)
+
+  const capabilities = plan.input.target.execution?.requiredCapabilities ?? []
+  if (capabilities.length > 0) {
+    if (!options.approvalProvider) {
+      throw permissionError(
+        'explicit run-once capabilities require a Host-approved execution grant',
+      )
+    }
+    await options.approvalProvider(plan, signal)
+    signal?.throwIfAborted()
+  }
 
   const adapter = await core.adapters.requireStarted(plan.input.target.adapterId, signal)
   assertDedicatedProvisioning(adapter, plan)
@@ -628,13 +656,19 @@ function normalizeInput(input: ExplicitRunOnceInput): NormalizedExplicitRunOnceI
   const normalizedExecution = input.target.execution
     ? normalizeExecutionRequirement(input.target.execution)
     : undefined
-  if ((normalizedExecution?.requiredCapabilities?.length ?? 0) > 0) {
-    throw new Error(
-      'explicit dedicated run-once does not yet accept requiredCapabilities; Host-native execution approvals remain authoritative',
-    )
-  }
-  const execution = normalizedExecution?.runtime
-    ? { runtime: structuredClone(normalizedExecution.runtime) }
+  const requiredCapabilities = normalizeExplicitCapabilities(
+    normalizedExecution?.requiredCapabilities ?? [],
+  )
+  const runtime = normalizedExecution?.runtime
+    ? structuredClone(normalizedExecution.runtime)
+    : undefined
+  const execution = runtime || requiredCapabilities.length > 0
+    ? {
+        ...(runtime ? { runtime } : {}),
+        ...(requiredCapabilities.length > 0
+          ? { requiredCapabilities }
+          : {}),
+      }
     : undefined
   if (!Array.isArray(input.steps)) throw new Error('steps must be an array')
   if (input.steps.length < MIN_STEPS || input.steps.length > MAX_STEPS) {
@@ -676,6 +710,24 @@ function normalizeInput(input: ExplicitRunOnceInput): NormalizedExplicitRunOnceI
   }
 }
 
+function normalizeExplicitCapabilities(
+  capabilities: readonly AgentExecutionCapability[],
+): AgentExecutionCapability[] {
+  const result = new Set<AgentExecutionCapability>()
+  for (const capability of capabilities) {
+    if (!EXPLICIT_CAPABILITIES.has(capability)) {
+      throw permissionError(
+        `explicit dedicated run-once supports only workspace-read, workspace-write, and network; received ${String(capability)}`,
+      )
+    }
+    result.add(capability)
+  }
+  if (result.has('workspace-write') || result.has('network')) {
+    result.add('workspace-read')
+  }
+  return [...result].sort()
+}
+
 function stagePrompt(
   input: NormalizedExplicitRunOnceInput,
   step: ExplicitRunOnceStepInput,
@@ -710,4 +762,8 @@ function requiredString(value: unknown, name: string): string {
     throw new Error(`${name} must be a non-empty string`)
   }
   return value.trim()
+}
+
+function permissionError(message: string): Error & { code: 'PERMISSION_UNAVAILABLE' } {
+  return Object.assign(new Error(message), { code: 'PERMISSION_UNAVAILABLE' as const })
 }
