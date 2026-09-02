@@ -1,0 +1,62 @@
+name: run Claude provenance doctor builder
+
+on:
+  push:
+    branches:
+      - fix/claude-doctor-provenance-activation
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/claude-doctor-provenance-activation
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Extract and run the staged implementation script
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          source = Path('.github/workflows/zz-build-claude-doctor.yml').read_text()
+          start_marker = "          python - <<'PY'\n"
+          end_marker = "\n          PY\n          git diff --check"
+          start = source.index(start_marker) + len(start_marker)
+          end = source.index(end_marker, start)
+          block = source[start:end]
+          lines = [line[10:] if line.startswith('          ') else line for line in block.splitlines()]
+          script = Path('/tmp/build-claude-doctor.py')
+          script.write_text('\n'.join(lines) + '\n')
+          subprocess.run(['python', str(script)], check=True)
+          subprocess.run(['git', 'diff', '--check'], check=True)
+          PY
+      - name: Validate implementation
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build
+          pnpm typecheck
+          pnpm test
+          pnpm test:host-contracts
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          rm .github/workflows/zz-build-claude-doctor.yml
+          rm .github/workflows/zz-run-claude-doctor-builder.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(claude): separate plugin integrity provenance and activation'
+          git push origin HEAD:fix/claude-doctor-provenance-activation
