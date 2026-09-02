@@ -461,6 +461,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
         this.requestTimeoutMs,
       )
       .catch(() => undefined)
+    if (snapshot) assertHostCwd(snapshot, permissions, 'thread/read')
     const outputSummary = snapshot && turnId
       ? summarizeThreadTurn(snapshot, turnId, this.outputMaxChars)
       : undefined
@@ -533,6 +534,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     const selected = await this.selectPermissionClientForSession(
       request.session.sessionId,
       request.requirement.runtime,
+      permissions,
       signal,
     )
     const snapshot = await selected.client.request(
@@ -617,6 +619,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
   private async selectPermissionClientForSession(
     sessionId: string,
     requirement: AgentRuntimeRequirement | undefined,
+    permissions: CodexAdapterPermissionEvidence,
     signal?: AbortSignal,
   ): Promise<PermissionClient & { runtime: ResolvedRuntime }> {
     const errors: Error[] = []
@@ -624,18 +627,23 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     for (const executable of this.permissionExecutableCandidates(preferred)) {
       try {
         const client = await this.permissionClient(executable, signal)
-        await client.request(
+        const snapshot = await client.request(
           'thread/read',
           { threadId: sessionId, includeTurns: false },
           signal,
           this.requestTimeoutMs,
-        )
+        ) as any
+        assertHostCwd(snapshot, permissions, 'thread/read')
         const runtime = await resolveRuntime(client, requirement, executable, signal)
         return { executable, client, runtime }
       } catch (error: unknown) {
         errors.push(error instanceof Error ? error : new Error(String(error)))
       }
     }
+    const permissionFailure = errors.find(error =>
+      error instanceof AgentExecutionError && error.code === 'PERMISSION_UNAVAILABLE',
+    )
+    if (permissionFailure) throw permissionFailure
     throw contextualizeProtocolError(
       new AggregateError(errors, `no Codex executable could read Session ${sessionId}`),
       `Codex Session ${sessionId} is unavailable`,
