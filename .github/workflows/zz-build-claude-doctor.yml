@@ -1,0 +1,981 @@
+name: one-shot build Claude provenance doctor
+
+on:
+  push:
+    branches:
+      - fix/claude-doctor-provenance-activation
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/claude-doctor-provenance-activation
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Implement provenance and activation-aware Doctor
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          state_path = Path('src/setup/providers/claude-code-state.ts')
+          text = state_path.read_text()
+          text = text.replace(
+              "import type { DoctorCheck, HostSetupContext, SetupRequestOptions } from '../types.js'\n",
+              "import {\n  readClaudeActivation,\n  type ClaudeActivationRecord,\n} from '../../claude-activation.js'\nimport type { DoctorCheck, HostSetupContext, SetupRequestOptions } from '../types.js'\n",
+          )
+          text = text.replace(
+              'export const CLAUDE_CODE_SETUP_MANIFEST_VERSION = 1',
+              'export const CLAUDE_CODE_SETUP_MANIFEST_VERSION = 2',
+          )
+          manifest_pattern = re.compile(
+              r"export interface ClaudeCodeSetupManifest \{.*?\n\}\n\nexport interface ClaudeCodeManagedFileState",
+              re.S,
+          )
+          manifest_replacement = """export interface ClaudeCodeRuntimeProvenance {
+  readonly packageName: string
+  readonly packageVersion: string
+  readonly packageRoot: string
+  readonly nodeExecutable: string
+  readonly mcpServerPath: string
+  readonly mcpServerDigest: string
+  readonly cliPath: string
+  readonly cliDigest: string
+  readonly generation: string
+}
+
+export interface ClaudeCodeSetupManifestV1 {
+  readonly version: 1
+  readonly hostId: 'claude-code'
+  readonly scope: 'user' | 'project'
+  readonly projectDir: string
+  readonly pluginRoot: string
+  readonly ownedFiles: Readonly<Record<string, string>>
+  readonly installedAt: string
+}
+
+export interface ClaudeCodeSetupManifestV2 {
+  readonly version: 2
+  readonly hostId: 'claude-code'
+  readonly scope: 'user' | 'project'
+  readonly projectDir: string
+  readonly pluginRoot: string
+  readonly ownedFiles: Readonly<Record<string, string>>
+  readonly installedAt: string
+  readonly runtime: ClaudeCodeRuntimeProvenance
+}
+
+export type ClaudeCodeSetupManifest =
+  | ClaudeCodeSetupManifestV1
+  | ClaudeCodeSetupManifestV2
+
+export interface ClaudeCodeManagedFileState"""
+          text, count = manifest_pattern.subn(manifest_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('manifest interface replacement failed')
+          text = text.replace(
+              '  readonly cliFile: string\n}',
+              '  readonly cliFile: string\n  readonly activationFile: string\n}',
+          )
+          text = text.replace(
+              "  readonly claudeExecutable?: string\n  readonly conflicts: readonly string[]\n}",
+              "  readonly claudeExecutable?: string\n  readonly runtime: ClaudeCodeRuntimeProvenance\n  readonly generation: string\n  readonly activation?: ClaudeActivationRecord\n  readonly conflicts: readonly string[]\n}",
+          )
+          old_inspect = """  const [manifest, desired, pluginRootExists, stateRootExists, claudeExecutable] = await Promise.all([
+    readClaudeSetupManifest(paths.setupManifestFile),
+    desiredClaudePluginFiles(paths),
+    pathExists(paths.pluginRoot),
+    pathExists(paths.stateRoot),
+    findClaudeExecutable(context),
+  ])"""
+          new_inspect = """  const runtime = await desiredClaudeRuntimeProvenance(paths)
+  const [
+    manifest,
+    desired,
+    pluginRootExists,
+    stateRootExists,
+    claudeExecutable,
+    activation,
+  ] = await Promise.all([
+    readClaudeSetupManifest(paths.setupManifestFile),
+    desiredClaudePluginFiles(paths, runtime),
+    pathExists(paths.pluginRoot),
+    pathExists(paths.stateRoot),
+    findClaudeExecutable(context),
+    readClaudeActivation(paths.activationFile, paths.pluginRoot),
+  ])"""
+          if old_inspect not in text:
+              raise SystemExit('inspect promise block not found')
+          text = text.replace(old_inspect, new_inspect)
+          text = text.replace(
+              "    ...(claudeExecutable ? { claudeExecutable } : {}),\n    conflicts: [],",
+              "    ...(claudeExecutable ? { claudeExecutable } : {}),\n    runtime,\n    generation: runtime.generation,\n    ...(activation ? { activation } : {}),\n    conflicts: [],",
+          )
+
+          paths_pattern = re.compile(
+              r"export function claudeCodeSetupPaths\(.*?\n\}\n\nexport function claudeCodeManualSteps",
+              re.S,
+          )
+          paths_replacement = """export function claudeCodeSetupPaths(
+  context: HostSetupContext,
+  options: SetupRequestOptions,
+): ClaudeCodeSetupPaths {
+  const projectDir = path.resolve(options.projectDir)
+  const skillsRoot = options.scope === 'user'
+    ? path.join(context.homeDir, '.claude', 'skills')
+    : path.join(projectDir, '.claude', 'skills')
+  const stateRoot = path.join(context.homeDir, '.flowit-workflow', 'claude')
+  return {
+    pluginRoot: path.join(skillsRoot, CLAUDE_CODE_PLUGIN_NAME),
+    setupManifestFile: options.scope === 'user'
+      ? path.join(context.homeDir, '.flowit-workflow', 'setup', 'claude-code-user.json')
+      : path.join(projectDir, '.flowit-workflow', 'setup', 'claude-code.json'),
+    stateRoot,
+    activationFile: path.join(stateRoot, 'activation.json'),
+    packageManifestFile: path.join(context.packageRoot, 'package.json'),
+    sourcePluginManifestFile: path.join(context.packageRoot, '.claude-plugin', 'plugin.json'),
+    sourceRunBoundSkillFile: path.join(context.packageRoot, 'skills', 'run-bound', 'SKILL.md'),
+    sourceOrchestrateSkillFile: path.join(context.packageRoot, 'skills', 'orchestrate', 'SKILL.md'),
+    sourceRouteSkillFile: path.join(context.packageRoot, 'skills', 'route', 'SKILL.md'),
+    mcpServerFile: path.join(context.packageRoot, 'dist', 'mcp-server.js'),
+    cliFile: path.join(context.packageRoot, 'dist', 'cli.js'),
+  }
+}
+
+export function claudeCodeManualSteps"""
+          text, count = paths_pattern.subn(paths_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('paths function replacement failed')
+
+          manual_pattern = re.compile(
+              r"export function claudeCodeManualSteps\(.*?\n\}\n\nexport function claudeCodeDoctorChecks",
+              re.S,
+          )
+          manual_replacement = """export function claudeCodeManualSteps(
+  options: SetupRequestOptions,
+  state: ClaudeCodeState,
+): string[] {
+  const steps: string[] = []
+  if (!state.claudeExecutable) {
+    steps.push('Install/authenticate Claude Code, then rerun `flowit-workflow doctor claude-code`.')
+  }
+  if (options.scope === 'project') {
+    steps.push(
+      'Launch Claude Code from the project root and accept its workspace-trust and project MCP approval prompts. Flowit does not bypass Claude Code host security gates.',
+    )
+  }
+  if (!claudeActivationIsCurrent(state)) {
+    steps.push('Restart Claude Code or run `/reload-plugins` so the current Flowit plugin generation, MCP server, and routing Hooks are loaded.')
+  }
+  return steps
+}
+
+export function claudeCodeDoctorChecks"""
+          text, count = manual_pattern.subn(manual_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('manual function replacement failed')
+
+          doctor_pattern = re.compile(
+              r"export function claudeCodeDoctorChecks\(.*?\n\}\n\nexport function desiredOwnedFilesAfterPlan",
+              re.S,
+          )
+          doctor_replacement = """export function claudeCodeDoctorChecks(
+  options: SetupRequestOptions,
+  state: ClaudeCodeState,
+): DoctorCheck[] {
+  const checks: DoctorCheck[] = [
+    state.claudeExecutable
+      ? {
+          id: 'claude-executable',
+          status: 'ok',
+          summary: `Claude Code executable detected at ${state.claudeExecutable}`,
+        }
+      : {
+          id: 'claude-executable',
+          status: 'warning',
+          summary: 'Claude Code executable was not found on PATH',
+          repairable: false,
+        },
+  ]
+
+  const missing = state.files.filter(file => !file.current.exists)
+  const modified = state.files.filter(file =>
+    file.current.exists && Boolean(file.ownedHash) && file.current.hash !== file.ownedHash,
+  )
+  const unowned = state.files.filter(file => file.current.exists && !file.ownedHash)
+  if (state.conflicts.length || missing.length || modified.length || unowned.length) {
+    checks.push({
+      id: 'claude-ownership-integrity',
+      status: 'error',
+      summary: 'Claude Flowit plugin ownership integrity is not intact',
+      detail: [
+        ...state.conflicts,
+        ...(missing.length ? [`Missing: ${missing.map(row => row.relativePath).join(', ')}`] : []),
+        ...(modified.length ? [`Modified after setup: ${modified.map(row => row.relativePath).join(', ')}`] : []),
+        ...(unowned.length ? [`Present but unowned: ${unowned.map(row => row.relativePath).join(', ')}`] : []),
+      ].join(' '),
+      repairable: missing.length > 0 && modified.length === 0 && unowned.length === 0,
+    })
+  } else {
+    checks.push({
+      id: 'claude-ownership-integrity',
+      status: 'ok',
+      summary: 'Claude Flowit plugin files match their installation ownership snapshot',
+    })
+  }
+
+  for (const file of state.files) {
+    const intact = file.current.exists && Boolean(file.ownedHash) && file.current.hash === file.ownedHash
+    checks.push(intact
+      ? {
+          id: `plugin-integrity:${file.relativePath}`,
+          status: 'ok',
+          summary: `${file.relativePath} matches the installed ownership snapshot`,
+        }
+      : {
+          id: `plugin-integrity:${file.relativePath}`,
+          status: 'error',
+          summary: file.current.exists
+            ? `${file.relativePath} no longer matches its installed ownership snapshot`
+            : `${file.relativePath} is missing from the installed Claude plugin`,
+          repairable: !file.current.exists && Boolean(file.ownedHash),
+        })
+  }
+
+  checks.push(claudeRuntimeMatchesManifest(state)
+    ? {
+        id: 'claude-runtime-currency',
+        status: 'ok',
+        summary: `Installed Claude plugin is bound to Flowit ${state.runtime.packageVersion} at ${state.runtime.packageRoot}`,
+      }
+    : {
+        id: 'claude-runtime-currency',
+        status: 'warning',
+        summary: state.manifest?.version === 1
+          ? 'Claude setup manifest predates Runtime provenance; run confirmed setup to migrate it'
+          : 'Claude plugin files are intact but refer to a different Flowit Runtime than the Doctor currently running',
+        detail: state.manifest?.version === 2
+          ? `Installed Runtime: ${state.manifest.runtime.packageVersion} at ${state.manifest.runtime.packageRoot}. Current Doctor Runtime: ${state.runtime.packageVersion} at ${state.runtime.packageRoot}.`
+          : undefined,
+        repairable: false,
+      })
+
+  const activation = state.activation
+  const current = claudeActivationIsCurrent(state)
+  checks.push(activation
+    ? {
+        id: 'claude-plugin-registration',
+        status: 'ok',
+        summary: `Claude has emitted Flowit activation evidence for ${activation.pluginRoot}`,
+      }
+    : {
+        id: 'claude-plugin-registration',
+        status: 'warning',
+        summary: 'No Claude activation evidence exists for this Flowit plugin root',
+        repairable: false,
+      })
+  checks.push(current && (activation?.mcpInitializedAt || activation?.lifecycleHookSeenAt || activation?.userPromptHookSeenAt)
+    ? {
+        id: 'claude-plugin-enabled',
+        status: 'ok',
+        summary: 'The current Flowit plugin generation has been loaded by Claude',
+      }
+    : {
+        id: 'claude-plugin-enabled',
+        status: 'warning',
+        summary: 'The current Flowit plugin generation has not been observed in a Claude session',
+        repairable: false,
+      })
+  checks.push(current && activation?.mcpInitializedAt
+    ? {
+        id: 'claude-mcp-activation',
+        status: 'ok',
+        summary: `Claude initialized the Flowit MCP server at ${activation.mcpInitializedAt}`,
+      }
+    : {
+        id: 'claude-mcp-activation',
+        status: 'warning',
+        summary: 'The current Claude session has not initialized this Flowit MCP generation',
+        repairable: false,
+      })
+  checks.push(current && activation?.userPromptHookSeenAt
+    ? {
+        id: 'claude-routing-hook-activation',
+        status: 'ok',
+        summary: `Claude ran the Flowit UserPromptSubmit routing Hook at ${activation.userPromptHookSeenAt}`,
+      }
+    : {
+        id: 'claude-routing-hook-activation',
+        status: 'warning',
+        summary: 'The current Flowit UserPromptSubmit routing Hook has not been observed',
+        repairable: false,
+      })
+  checks.push(current && activation?.preToolHookSeenAt
+    ? {
+        id: 'claude-pretool-hook-activation',
+        status: 'ok',
+        summary: `Claude ran the Flowit PreToolUse caller-attestation Hook at ${activation.preToolHookSeenAt}`,
+      }
+    : current && activation?.userPromptHookSeenAt
+      ? {
+          id: 'claude-pretool-hook-activation',
+          status: 'skipped',
+          summary: 'PreToolUse attestation has not been exercised yet; it will be recorded on the first adaptive Flowit tool call',
+          repairable: false,
+        }
+      : {
+          id: 'claude-pretool-hook-activation',
+          status: 'warning',
+          summary: 'No current-generation Flowit routing Hook evidence is available',
+          repairable: false,
+        })
+  checks.push(current
+    ? {
+        id: 'claude-reload-required',
+        status: 'ok',
+        summary: 'Claude activation evidence matches the currently installed Flowit generation',
+      }
+    : {
+        id: 'claude-reload-required',
+        status: 'warning',
+        summary: 'Restart Claude Code or run `/reload-plugins` to activate the currently installed Flowit generation',
+        repairable: false,
+      })
+
+  checks.push(state.stateRootExists
+    ? {
+        id: 'claude-state-root',
+        status: 'ok',
+        summary: 'Claude durable state directory exists',
+      }
+    : {
+        id: 'claude-state-root',
+        status: 'warning',
+        summary: 'Claude durable state directory has not been initialized',
+        repairable: true,
+      })
+  if (options.scope === 'project') {
+    checks.push({
+      id: 'claude-project-trust',
+      status: 'warning',
+      summary: 'Project-scope Flowit plugins remain subject to Claude Code workspace trust and MCP approval',
+      repairable: false,
+    })
+  }
+  return checks
+}
+
+export function claudeRuntimeMatchesManifest(state: ClaudeCodeState): boolean {
+  if (state.manifest?.version !== 2) return false
+  const installed = state.manifest.runtime
+  const current = state.runtime
+  return installed.packageName === current.packageName &&
+    installed.packageVersion === current.packageVersion &&
+    path.resolve(installed.packageRoot) === path.resolve(current.packageRoot) &&
+    installed.nodeExecutable === current.nodeExecutable &&
+    installed.mcpServerPath === current.mcpServerPath &&
+    installed.mcpServerDigest === current.mcpServerDigest &&
+    installed.cliPath === current.cliPath &&
+    installed.cliDigest === current.cliDigest &&
+    installed.generation === current.generation
+}
+
+export function claudeActivationIsCurrent(state: ClaudeCodeState): boolean {
+  const activation = state.activation
+  return Boolean(
+    activation &&
+    activation.generation === state.generation &&
+    path.resolve(activation.pluginRoot) === path.resolve(state.paths.pluginRoot) &&
+    (!activation.runtimePackageRoot ||
+      path.resolve(activation.runtimePackageRoot) === path.resolve(state.runtime.packageRoot)) &&
+    (!activation.packageVersion || activation.packageVersion === state.runtime.packageVersion) &&
+    (!activation.mcpServerDigest || activation.mcpServerDigest === state.runtime.mcpServerDigest) &&
+    (!activation.cliDigest || activation.cliDigest === state.runtime.cliDigest),
+  )
+}
+
+export function claudeInstallationIsIntact(state: ClaudeCodeState): boolean {
+  return state.conflicts.length === 0 && state.files.every(file =>
+    file.current.exists && Boolean(file.ownedHash) && file.current.hash === file.ownedHash,
+  )
+}
+
+export function desiredOwnedFilesAfterPlan"""
+          text, count = doctor_pattern.subn(doctor_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('doctor function replacement failed')
+
+          desired_pattern = re.compile(
+              r"async function desiredClaudePluginFiles\(.*?\n\}\n\nasync function readClaudeSetupManifest",
+              re.S,
+          )
+          desired_replacement = """async function desiredClaudeRuntimeProvenance(
+  paths: ClaudeCodeSetupPaths,
+): Promise<ClaudeCodeRuntimeProvenance> {
+  const [packageRaw, mcpServer, cli] = await Promise.all([
+    readFile(paths.packageManifestFile, 'utf8'),
+    readFile(paths.mcpServerFile, 'utf8'),
+    readFile(paths.cliFile, 'utf8'),
+  ])
+  const packageManifest = parseJsonObject(packageRaw, paths.packageManifestFile)
+  const packageName = typeof packageManifest.name === 'string'
+    ? packageManifest.name.trim()
+    : ''
+  const packageVersion = typeof packageManifest.version === 'string'
+    ? packageManifest.version.trim()
+    : ''
+  if (!packageName || !packageVersion) {
+    throw new Error('Flowit package name/version is missing')
+  }
+  const packageRoot = path.dirname(paths.packageManifestFile)
+  const base = {
+    packageName,
+    packageVersion,
+    packageRoot,
+    nodeExecutable: process.execPath,
+    mcpServerPath: paths.mcpServerFile,
+    mcpServerDigest: digest(mcpServer),
+    cliPath: paths.cliFile,
+    cliDigest: digest(cli),
+  }
+  return {
+    ...base,
+    generation: digest(JSON.stringify({ ...base, pluginRoot: paths.pluginRoot })),
+  }
+}
+
+async function desiredClaudePluginFiles(
+  paths: ClaudeCodeSetupPaths,
+  runtime: ClaudeCodeRuntimeProvenance,
+): Promise<Record<ClaudeCodeManagedFile, string>> {
+  const [pluginRaw, runBound, orchestrate, route] = await Promise.all([
+    readFile(paths.sourcePluginManifestFile, 'utf8'),
+    readFile(paths.sourceRunBoundSkillFile, 'utf8'),
+    readFile(paths.sourceOrchestrateSkillFile, 'utf8'),
+    readFile(paths.sourceRouteSkillFile, 'utf8'),
+  ])
+  const sourcePlugin = parseJsonObject(pluginRaw, paths.sourcePluginManifestFile)
+  const pluginManifest = {
+    ...sourcePlugin,
+    name: CLAUDE_CODE_PLUGIN_NAME,
+    version: runtime.packageVersion,
+  }
+  const routingAuthorityDir = path.join(paths.stateRoot, 'routing-authority')
+  const activationArgs = [
+    `--flowit-plugin-root=${paths.pluginRoot}`,
+    `--flowit-generation=${runtime.generation}`,
+    `--flowit-runtime-root=${runtime.packageRoot}`,
+    `--flowit-runtime-version=${runtime.packageVersion}`,
+    `--flowit-mcp-digest=${runtime.mcpServerDigest}`,
+    `--flowit-cli-digest=${runtime.cliDigest}`,
+    `--flowit-activation-file=${paths.activationFile}`,
+  ]
+  const mcp = {
+    mcpServers: {
+      orchestration: {
+        command: runtime.nodeExecutable,
+        args: [runtime.mcpServerPath],
+        env: {
+          FLOWIT_WORKFLOW_ADAPTER: 'claude-code',
+          FLOWIT_WORKFLOW_PLUGIN_ROOT: paths.pluginRoot,
+          FLOWIT_WORKFLOW_CLAUDE_MUTATIONS: '1',
+          FLOWIT_WORKFLOW_CLAUDE_ALLOW_LIVE_RESUME: '0',
+          FLOWIT_WORKFLOW_ROUTING_MODE: 'suggest',
+          FLOWIT_WORKFLOW_ROUTING_AUTHORITY_DIR: routingAuthorityDir,
+          FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION: '1',
+          FLOWIT_WORKFLOW_INSTALLATION_GENERATION: runtime.generation,
+          FLOWIT_WORKFLOW_RUNTIME_PACKAGE_ROOT: runtime.packageRoot,
+          FLOWIT_WORKFLOW_RUNTIME_VERSION: runtime.packageVersion,
+          FLOWIT_WORKFLOW_MCP_SERVER_DIGEST: runtime.mcpServerDigest,
+          FLOWIT_WORKFLOW_CLI_DIGEST: runtime.cliDigest,
+          FLOWIT_WORKFLOW_CLAUDE_ACTIVATION_FILE: paths.activationFile,
+        },
+      },
+    },
+  }
+  const hookEntry = {
+    hooks: [{
+      type: 'command',
+      command: runtime.nodeExecutable,
+      args: [runtime.cliPath, 'claude-hook', ...activationArgs],
+      timeout: 10,
+    }],
+  }
+  const routingHookEntry = {
+    hooks: [{
+      type: 'command',
+      command: runtime.nodeExecutable,
+      args: [runtime.cliPath, 'claude-routing-hook', ...activationArgs],
+      timeout: 10,
+    }],
+  }
+  const hooks = {
+    hooks: {
+      UserPromptSubmit: [routingHookEntry],
+      PreToolUse: [{
+        matcher:
+          '^mcp__plugin_flowit-workflow_orchestration__(workflow_assess|workflow_prepare|workflow_commit)$',
+        ...routingHookEntry,
+      }],
+      SessionStart: [hookEntry],
+      Stop: [hookEntry],
+      StopFailure: [hookEntry],
+      TaskCompleted: [hookEntry],
+      SubagentStop: [hookEntry],
+      SessionEnd: [hookEntry],
+    },
+  }
+  return {
+    '.claude-plugin/plugin.json': `${JSON.stringify(pluginManifest, null, 2)}\n`,
+    'skills/run-bound/SKILL.md': runBound,
+    'skills/orchestrate/SKILL.md': orchestrate,
+    'skills/route/SKILL.md': route,
+    'hooks/hooks.json': `${JSON.stringify(hooks, null, 2)}\n`,
+    '.mcp.json': `${JSON.stringify(mcp, null, 2)}\n`,
+  }
+}
+
+async function readClaudeSetupManifest"""
+          text, count = desired_pattern.subn(desired_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('desired files replacement failed')
+
+          parser_pattern = re.compile(
+              r"async function readClaudeSetupManifest\(.*?\n\}\n\nfunction parseJsonObject",
+              re.S,
+          )
+          parser_replacement = """async function readClaudeSetupManifest(
+  file: string,
+): Promise<ClaudeCodeSetupManifest | undefined> {
+  try {
+    const value = parseJsonObject(await readFile(file, 'utf8'), file)
+    const common =
+      value.hostId === CLAUDE_CODE_SETUP_HOST_ID &&
+      (value.scope === 'user' || value.scope === 'project') &&
+      typeof value.projectDir === 'string' &&
+      typeof value.pluginRoot === 'string' &&
+      isRecord(value.ownedFiles) &&
+      Object.values(value.ownedFiles).every(hash => typeof hash === 'string') &&
+      typeof value.installedAt === 'string'
+    if (!common) throw new Error(`invalid Claude Code setup ownership manifest ${file}`)
+    if (value.version === 1) return value as unknown as ClaudeCodeSetupManifestV1
+    if (value.version !== CLAUDE_CODE_SETUP_MANIFEST_VERSION || !isRecord(value.runtime)) {
+      throw new Error(`invalid Claude Code setup ownership manifest ${file}`)
+    }
+    const runtime = value.runtime
+    if (
+      typeof runtime.packageName !== 'string' ||
+      typeof runtime.packageVersion !== 'string' ||
+      typeof runtime.packageRoot !== 'string' ||
+      typeof runtime.nodeExecutable !== 'string' ||
+      typeof runtime.mcpServerPath !== 'string' ||
+      typeof runtime.mcpServerDigest !== 'string' ||
+      typeof runtime.cliPath !== 'string' ||
+      typeof runtime.cliDigest !== 'string' ||
+      typeof runtime.generation !== 'string'
+    ) throw new Error(`invalid Claude Code Runtime provenance in ${file}`)
+    return value as unknown as ClaudeCodeSetupManifestV2
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+function parseJsonObject"""
+          text, count = parser_pattern.subn(parser_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('manifest parser replacement failed')
+          state_path.write_text(text)
+
+          provider_path = Path('src/setup/providers/claude-code.ts')
+          text = provider_path.read_text()
+          text = text.replace(
+              "import {\n  CLAUDE_CODE_MANAGED_FILES,",
+              "import { probeInstalledClaudeMcp } from './claude-mcp-probe.js'\nimport {\n  CLAUDE_CODE_MANAGED_FILES,",
+          )
+          text = text.replace(
+              "  claudeCodeManualSteps,\n  desiredOwnedFilesAfterPlan,",
+              "  claudeActivationIsCurrent,\n  claudeCodeManualSteps,\n  claudeInstallationIsIntact,\n  claudeRuntimeMatchesManifest,\n  desiredOwnedFilesAfterPlan,",
+          )
+          old_doctor = """      const checks = claudeCodeDoctorChecks(options, state)
+      const status = checks.some(check => check.status === 'error')
+        ? 'unhealthy'
+        : checks.some(check => check.status === 'warning')
+          ? 'degraded'
+          : 'healthy'
+      return { hostId: this.id, displayName: this.displayName, status, checks }"""
+          new_doctor = """      const checks = claudeCodeDoctorChecks(options, state)
+      checks.push(await probeInstalledClaudeMcp(state))
+      const status = checks.some(check => check.status === 'error')
+        ? 'unhealthy'
+        : checks.some(check => check.status === 'warning')
+          ? 'degraded'
+          : 'healthy'
+      return { hostId: this.id, displayName: this.displayName, status, checks }"""
+          if old_doctor not in text:
+              raise SystemExit('provider doctor block not found')
+          text = text.replace(old_doctor, new_doctor)
+          marker = """    const warnings = [...state.conflicts]
+    if (state.conflicts.length > 0) {"""
+          replacement = """    const warnings = [...state.conflicts]
+    if (
+      operation === 'repair' &&
+      claudeInstallationIsIntact(state) &&
+      !claudeRuntimeMatchesManifest(state)
+    ) {
+      return {
+        version: 1,
+        operation,
+        hostId: this.id,
+        displayName: this.displayName,
+        scope: options.scope,
+        summary: 'Claude plugin files are intact; Repair will not silently switch their Flowit Runtime provenance.',
+        actions: [],
+        warnings: [
+          ...warnings,
+          'Run `flowit-workflow setup claude-code --dry-run` from the intended canonical Runtime and confirm that setup plan if you want to rebind the plugin.',
+        ],
+        manualSteps: claudeCodeManualSteps(options, state),
+      }
+    }
+    if (state.conflicts.length > 0) {"""
+          if marker not in text:
+              raise SystemExit('provider buildPlan marker not found')
+          text = text.replace(marker, replacement, 1)
+          old_status = """    const doctor = await this.doctor(context, options)
+    const manualRequired = !state.claudeExecutable || options.scope === 'project'
+    return {
+      operation,
+      hostId: this.id,
+      displayName: this.displayName,
+      status: doctor.status === 'unhealthy'
+        ? 'failed'
+        : manualRequired
+          ? 'manual-action-required'
+          : 'complete',"""
+          new_status = """    const doctor = await this.doctor(context, options)
+    return {
+      operation,
+      hostId: this.id,
+      displayName: this.displayName,
+      status: doctor.status === 'unhealthy'
+        ? 'failed'
+        : doctor.status === 'degraded'
+          ? 'manual-action-required'
+          : 'complete',"""
+          if old_status not in text:
+              raise SystemExit('provider apply status block not found')
+          text = text.replace(old_status, new_status)
+          old_manifest = """  const manifest: ClaudeCodeSetupManifest = {
+    version: CLAUDE_CODE_SETUP_MANIFEST_VERSION,
+    hostId: CLAUDE_CODE_SETUP_HOST_ID,
+    scope: options.scope,
+    projectDir: path.resolve(options.projectDir),
+    pluginRoot: state.paths.pluginRoot,
+    ownedFiles: desiredOwnedFilesAfterPlan(state, actionIds),
+    installedAt: state.manifest?.installedAt ?? new Date().toISOString(),
+  }"""
+          new_manifest = """  const manifest: ClaudeCodeSetupManifest = {
+    version: CLAUDE_CODE_SETUP_MANIFEST_VERSION,
+    hostId: CLAUDE_CODE_SETUP_HOST_ID,
+    scope: options.scope,
+    projectDir: path.resolve(options.projectDir),
+    pluginRoot: state.paths.pluginRoot,
+    ownedFiles: desiredOwnedFilesAfterPlan(state, actionIds),
+    installedAt: state.manifest?.installedAt ?? new Date().toISOString(),
+    runtime: structuredClone(state.runtime),
+  }"""
+          if old_manifest not in text:
+              raise SystemExit('provider manifest block not found')
+          text = text.replace(old_manifest, new_manifest)
+          old_needs = """  if (!state.manifest) return fileActions.length > 0 || !state.stateRootExists
+  if (state.manifest.pluginRoot !== state.paths.pluginRoot) return true"""
+          new_needs = """  if (!state.manifest) return fileActions.length > 0 || !state.stateRootExists
+  if (state.manifest.version !== CLAUDE_CODE_SETUP_MANIFEST_VERSION) return true
+  if (!claudeRuntimeMatchesManifest(state)) return true
+  if (state.manifest.pluginRoot !== state.paths.pluginRoot) return true"""
+          if old_needs not in text:
+              raise SystemExit('needsManifest block not found')
+          text = text.replace(old_needs, new_needs)
+          provider_path.write_text(text)
+
+          cli_path = Path('src/cli.ts')
+          text = cli_path.read_text()
+          text = text.replace(
+              "import { ingestBridgeHook, type GenericHookInput } from './bridge/hook.js'\n",
+              "import { ingestBridgeHook, type GenericHookInput } from './bridge/hook.js'\nimport {\n  recordClaudeActivation,\n  type ClaudeActivationMetadata,\n} from './claude-activation.js'\n",
+          )
+          old_cases = """    case 'claude-hook':
+      await ingestClaudeHook(JSON.parse(await readStdin()) as ClaudeHookInput)
+      return
+    case 'claude-routing-hook':
+      console.log(
+        JSON.stringify(
+          handleClaudeRoutingHook(
+            JSON.parse(await readStdin()) as ClaudeRoutingHookInput,
+          ),
+        ),
+      )
+      return"""
+          new_cases = """    case 'claude-hook': {
+      const input = JSON.parse(await readStdin()) as ClaudeHookInput
+      await recordClaudeActivation(
+        'lifecycle-hook',
+        claudeActivationMetadata(args),
+        { env: activationEnvironment(args) },
+      ).catch(() => false)
+      await ingestClaudeHook(input)
+      return
+    }
+    case 'claude-routing-hook': {
+      const input = JSON.parse(await readStdin()) as ClaudeRoutingHookInput
+      await recordClaudeActivation(
+        input.hook_event_name === 'PreToolUse' ? 'pre-tool-hook' : 'user-prompt-hook',
+        claudeActivationMetadata(args),
+        { env: activationEnvironment(args) },
+      ).catch(() => false)
+      console.log(JSON.stringify(handleClaudeRoutingHook(input)))
+      return
+    }"""
+          if old_cases not in text:
+              raise SystemExit('CLI Claude cases not found')
+          text = text.replace(old_cases, new_cases)
+          helper_marker = """function options(args: string[], name: string): string[] {"""
+          helper = """function claudeActivationMetadata(args: string[]): ClaudeActivationMetadata {
+  return {
+    ...(option(args, 'flowit-plugin-root')
+      ? { pluginRoot: option(args, 'flowit-plugin-root') }
+      : {}),
+    ...(option(args, 'flowit-generation')
+      ? { generation: option(args, 'flowit-generation') }
+      : {}),
+    ...(option(args, 'flowit-runtime-root')
+      ? { runtimePackageRoot: option(args, 'flowit-runtime-root') }
+      : {}),
+    ...(option(args, 'flowit-runtime-version')
+      ? { packageVersion: option(args, 'flowit-runtime-version') }
+      : {}),
+    ...(option(args, 'flowit-mcp-digest')
+      ? { mcpServerDigest: option(args, 'flowit-mcp-digest') }
+      : {}),
+    ...(option(args, 'flowit-cli-digest')
+      ? { cliDigest: option(args, 'flowit-cli-digest') }
+      : {}),
+  }
+}
+
+function activationEnvironment(args: string[]): NodeJS.ProcessEnv {
+  const file = option(args, 'flowit-activation-file')
+  return file
+    ? { ...process.env, FLOWIT_WORKFLOW_CLAUDE_ACTIVATION_FILE: file }
+    : process.env
+}
+
+function options(args: string[], name: string): string[] {"""
+          if helper_marker not in text:
+              raise SystemExit('CLI helper marker not found')
+          text = text.replace(helper_marker, helper)
+          cli_path.write_text(text)
+
+          mcp_path = Path('src/mcp-server.ts')
+          text = mcp_path.read_text()
+          text = text.replace(
+              "import { executeControl } from './control.js'\n",
+              "import { executeControl } from './control.js'\nimport { recordClaudeActivation } from './claude-activation.js'\n",
+          )
+          old_initialize = """    case 'initialize':
+      return {
+        protocolVersion:
+          typeof request.params?.protocolVersion === 'string'
+            ? request.params.protocolVersion
+            : '2025-06-18',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'flowit-workflow', version: '0.5.0-beta.3' },
+      }"""
+          new_initialize = """    case 'initialize':
+      if (adapterId === 'claude-code') {
+        await recordClaudeActivation('mcp-initialized').catch(() => false)
+      }
+      return {
+        protocolVersion:
+          typeof request.params?.protocolVersion === 'string'
+            ? request.params.protocolVersion
+            : '2025-06-18',
+        capabilities: { tools: {} },
+        serverInfo: { name: 'flowit-workflow', version: '0.5.0-beta.3' },
+      }"""
+          if old_initialize not in text:
+              raise SystemExit('MCP initialize block not found')
+          text = text.replace(old_initialize, new_initialize)
+          mcp_path.write_text(text)
+
+          test_path = Path('tests/claude-code-setup.test.ts')
+          text = test_path.read_text()
+          text = text.replace(
+              "import test from 'node:test'\n",
+              "import test from 'node:test'\nimport { recordClaudeActivation } from '../src/claude-activation.js'\n",
+          )
+          text = text.replace(
+              "    writeFile(path.join(packageRoot, 'dist', 'mcp-server.js'), 'export {}\\n', 'utf8'),",
+              "    writeFile(path.join(packageRoot, 'dist', 'mcp-server.js'), `const readline = require('node:readline')\\nconst rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })\\nconst send = value => process.stdout.write(JSON.stringify(value) + '\\\\n')\\nrl.on('line', line => { const message = JSON.parse(line); if (message.id === 1) send({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'flowit-workflow', version: 'fixture' } } }); if (message.id === 2) send({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'workflow_assess' }] } }) })\\n`, 'utf8'),",
+          )
+          text = text.replace(
+              "    assert.equal(result.status, 'complete')\n    assert.equal(result.doctor?.status, 'healthy')",
+              "    assert.equal(result.status, 'manual-action-required')\n    assert.equal(result.doctor?.status, 'degraded')",
+              1,
+          )
+          text = text.replace(
+              "    assert.deepEqual(\n      hooks.hooks.SessionStart[0].hooks[0].args,\n      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-hook'],\n    )",
+              "    assert.deepEqual(\n      hooks.hooks.SessionStart[0].hooks[0].args.slice(0, 2),\n      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-hook'],\n    )\n    assert.equal(hooks.hooks.SessionStart[0].hooks[0].args.some((arg: string) => arg.startsWith('--flowit-generation=')), true)",
+          )
+          text = text.replace(
+              "    assert.deepEqual(\n      hooks.hooks.UserPromptSubmit[0].hooks[0].args,\n      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],\n    )",
+              "    assert.deepEqual(\n      hooks.hooks.UserPromptSubmit[0].hooks[0].args.slice(0, 2),\n      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],\n    )",
+          )
+          text = text.replace(
+              "    assert.deepEqual(\n      hooks.hooks.PreToolUse[0].hooks[0].args,\n      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],\n    )",
+              "    assert.deepEqual(\n      hooks.hooks.PreToolUse[0].hooks[0].args.slice(0, 2),\n      [path.join(fx.packageRoot, 'dist', 'cli.js'), 'claude-routing-hook'],\n    )",
+          )
+          old_idempotent = """    const second = await provider.planSetup(fx.context, fx.userOptions)
+    assert.deepEqual(second.actions, [])
+    const doctor = await provider.doctor(fx.context, fx.userOptions)
+    assert.equal(doctor.status, 'healthy')"""
+          new_idempotent = """    const second = await provider.planSetup(fx.context, fx.userOptions)
+    assert.deepEqual(second.actions, [])
+    const beforeReload = await provider.doctor(fx.context, fx.userOptions)
+    assert.equal(beforeReload.status, 'degraded')
+
+    const mcp = await json(path.join(userPluginRoot(fx), '.mcp.json'))
+    const environment = mcp.mcpServers.orchestration.env
+    const metadata = {
+      pluginRoot: environment.FLOWIT_WORKFLOW_PLUGIN_ROOT,
+      generation: environment.FLOWIT_WORKFLOW_INSTALLATION_GENERATION,
+      runtimePackageRoot: environment.FLOWIT_WORKFLOW_RUNTIME_PACKAGE_ROOT,
+      packageVersion: environment.FLOWIT_WORKFLOW_RUNTIME_VERSION,
+      mcpServerDigest: environment.FLOWIT_WORKFLOW_MCP_SERVER_DIGEST,
+      cliDigest: environment.FLOWIT_WORKFLOW_CLI_DIGEST,
+    }
+    const activationEnv = {
+      FLOWIT_WORKFLOW_CLAUDE_ACTIVATION_FILE: environment.FLOWIT_WORKFLOW_CLAUDE_ACTIVATION_FILE,
+    }
+    await recordClaudeActivation('mcp-initialized', metadata, { env: activationEnv })
+    await recordClaudeActivation('user-prompt-hook', metadata, { env: activationEnv })
+    const doctor = await provider.doctor(fx.context, fx.userOptions)
+    assert.equal(doctor.status, 'healthy')"""
+          if old_idempotent not in text:
+              raise SystemExit('idempotent test block not found')
+          text = text.replace(old_idempotent, new_idempotent)
+          text = text.replace(
+              "    assert.equal(result.status, 'complete')\n    assert.equal(await exists(skill), true)",
+              "    assert.equal(result.status, 'manual-action-required')\n    assert.equal(await exists(skill), true)",
+          )
+          test_path.write_text(text)
+
+          drift_test = Path('tests/claude-doctor-provenance.test.ts')
+          drift_test.write_text("""import assert from 'node:assert/strict'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+import {
+  ClaudeCodeSetupProvider,
+  type HostSetupContext,
+  type SetupRequestOptions,
+} from '../src/setup/index.js'
+
+async function packageFixture(root: string, name: string): Promise<string> {
+  const packageRoot = path.join(root, name)
+  await Promise.all([
+    mkdir(path.join(packageRoot, '.claude-plugin'), { recursive: true }),
+    mkdir(path.join(packageRoot, 'skills', 'run-bound'), { recursive: true }),
+    mkdir(path.join(packageRoot, 'skills', 'orchestrate'), { recursive: true }),
+    mkdir(path.join(packageRoot, 'skills', 'route'), { recursive: true }),
+    mkdir(path.join(packageRoot, 'dist'), { recursive: true }),
+  ])
+  await Promise.all([
+    writeFile(path.join(packageRoot, 'package.json'), JSON.stringify({ name: '@coaseedgeltd/flowit-workflow', version: '0.5.0-beta.3' })),
+    writeFile(path.join(packageRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'flowit-workflow', description: 'fixture' })),
+    writeFile(path.join(packageRoot, 'skills', 'run-bound', 'SKILL.md'), 'run-bound\\n'),
+    writeFile(path.join(packageRoot, 'skills', 'orchestrate', 'SKILL.md'), 'orchestrate\\n'),
+    writeFile(path.join(packageRoot, 'skills', 'route', 'SKILL.md'), 'route\\n'),
+    writeFile(path.join(packageRoot, 'dist', 'cli.js'), 'export {}\\n'),
+    writeFile(path.join(packageRoot, 'dist', 'mcp-server.js'), `const readline = require('node:readline')\\nconst rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity })\\nconst send = value => process.stdout.write(JSON.stringify(value) + '\\\\n')\\nrl.on('line', line => { const message = JSON.parse(line); if (message.id === 1) send({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'flowit-workflow', version: 'fixture' } } }); if (message.id === 2) send({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'workflow_assess' }] } }) })\\n`),
+  ])
+  return packageRoot
+}
+
+test('Doctor separates intact ownership from Runtime provenance drift', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-claude-doctor-drift-'))
+  const home = path.join(root, 'home')
+  const project = path.join(root, 'project')
+  const bin = path.join(root, 'bin')
+  await Promise.all([mkdir(home), mkdir(project), mkdir(bin)])
+  await writeFile(path.join(bin, 'claude'), '#!/bin/sh\\n')
+  const installedRoot = await packageFixture(root, 'runtime-installed')
+  const currentRoot = path.join(root, 'runtime-current')
+  await cp(installedRoot, currentRoot, { recursive: true })
+  await writeFile(path.join(currentRoot, 'dist', 'cli.js'), 'export const current = true\\n')
+  const options: SetupRequestOptions = { scope: 'user', projectDir: project }
+  const context = (packageRoot: string): HostSetupContext => ({
+    cwd: project,
+    homeDir: home,
+    packageRoot,
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: '24.0.0',
+    env: { PATH: bin },
+  })
+  const provider = new ClaudeCodeSetupProvider()
+  try {
+    const plan = await provider.planSetup(context(installedRoot), options)
+    await provider.applySetup(context(installedRoot), plan, { ...options, assumeYes: true })
+
+    const report = await provider.doctor(context(currentRoot), options)
+    assert.equal(report.status, 'degraded')
+    assert.equal(report.checks.find(check => check.id === 'claude-ownership-integrity')?.status, 'ok')
+    assert.equal(report.checks.find(check => check.id === 'claude-runtime-currency')?.status, 'warning')
+    assert.equal(report.checks.some(check => /missing or differs/i.test(check.summary)), false)
+
+    const repair = await provider.planRepair(context(currentRoot), report, options)
+    assert.deepEqual(repair.actions, [])
+    assert.match(repair.warnings.join('\\n'), /will not silently switch|canonical Runtime/i)
+
+    const manifest = JSON.parse(await readFile(path.join(home, '.flowit-workflow', 'setup', 'claude-code-user.json'), 'utf8'))
+    assert.equal(manifest.version, 2)
+    assert.equal(manifest.runtime.packageRoot, installedRoot)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+""")
+          PY
+          git diff --check
+      - name: Validate implementation
+        shell: bash
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm build
+          pnpm typecheck
+          pnpm test
+          pnpm test:host-contracts
+      - name: Commit validated implementation
+        shell: bash
+        run: |
+          rm .github/workflows/zz-build-claude-doctor.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/claude-activation.ts src/setup/providers/claude-mcp-probe.ts src/setup/providers/claude-code-state.ts src/setup/providers/claude-code.ts src/cli.ts src/mcp-server.ts tests/claude-code-setup.test.ts tests/claude-doctor-provenance.test.ts .github/workflows/zz-build-claude-doctor.yml
+          git commit -m 'fix(claude): separate plugin integrity provenance and activation'
+          git push origin HEAD:fix/claude-doctor-provenance-activation
