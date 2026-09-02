@@ -37,8 +37,14 @@ jobs:
           end = source.index(end_marker, start)
           block = source[start:end]
           lines = [line[10:] if line.startswith('          ') else line for line in block.splitlines()]
+          code = '\n'.join(lines) + '\n'
+          old = "if old_doctor not in text:\n    raise SystemExit('provider doctor block not found')\ntext = text.replace(old_doctor, new_doctor)"
+          new = "doctor_start = text.index('      const checks = claudeCodeDoctorChecks(options, state)')\ndoctor_end = text.index('    } catch (error: unknown)', doctor_start)\ntext = text[:doctor_start] + new_doctor + '\\n' + text[doctor_end:]"
+          if old not in code:
+              raise SystemExit('staged provider doctor patch block not found')
+          code = code.replace(old, new)
           script = Path('/tmp/build-claude-doctor.py')
-          script.write_text('\n'.join(lines) + '\n')
+          script.write_text(code)
           subprocess.run(['python', str(script)], check=True)
           subprocess.run(['git', 'diff', '--check'], check=True)
           PY
