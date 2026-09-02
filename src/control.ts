@@ -1,6 +1,11 @@
 import type { FlowitOrchestrationCore } from './core/runtime.js'
 import type { AutomationTarget, CreatePipelineInput, CreateScheduleInput } from './core/types.js'
 import {
+  getExplicitRunOnce,
+  startExplicitRunOnce,
+  type ExplicitRunOnceInput,
+} from './explicit-run-once.js'
+import {
   commitPreparedWorkflow,
   createRoutingAuthorityFromEnvironment,
   getAdaptiveWorkflowRun,
@@ -31,6 +36,8 @@ export type ControlRequest =
       options?: CommitPreparedWorkflowOptions
     }
   | { op: 'workflow.run.get'; runId: string }
+  | { op: 'run-once.start'; input: ExplicitRunOnceInput }
+  | { op: 'run-once.get'; runId: string }
 
 export async function executeControl(
   core: FlowitOrchestrationCore,
@@ -81,6 +88,10 @@ export async function executeControl(
       )
     case 'workflow.run.get':
       return getAdaptiveWorkflowRun(core, request.runId)
+    case 'run-once.start':
+      return startExplicitRunOnce(core, request.input)
+    case 'run-once.get':
+      return getExplicitRunOnce(core, request.runId)
     default: {
       const exhaustive: never = request
       throw new Error(`unknown control request: ${JSON.stringify(exhaustive)}`)
