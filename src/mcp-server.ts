@@ -35,6 +35,10 @@ const adapterId = requireBuiltInAdapterId(
   process.env.FLOWIT_WORKFLOW_ADAPTER ?? 'claude-code',
   'FLOWIT_WORKFLOW_ADAPTER',
 )
+const trustedAdaptiveRoutingHost = adapterId === 'claude-code'
+const callerAttestationRequired =
+  trustedAdaptiveRoutingHost &&
+  process.env.FLOWIT_WORKFLOW_ROUTING_REQUIRE_CALLER_ATTESTATION?.trim() !== '0'
 const core = createConfiguredRuntime({ activeWorkers: false, defaultAdapterId: adapterId })
 const routingAuthority = createRoutingAuthorityFromEnvironment()
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
@@ -81,8 +85,11 @@ async function dispatch(request: JsonRpcRequest): Promise<unknown> {
     case 'tools/list':
       return { tools: tools() }
     case 'tools/call': {
-      await core.ready
       const name = String(request.params?.name ?? '')
+      if (name === 'workflow_prepare' || name === 'workflow_commit') {
+        assertTrustedAdaptiveRoutingHost(name)
+      }
+      await core.ready
       const args = (request.params?.arguments ?? {}) as Record<string, unknown>
       return {
         content: [{ type: 'text', text: JSON.stringify(await call(name, args), null, 2) }],
@@ -169,15 +176,17 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
       return routingAuthority.assess(assessmentInput(args), callerContext)
     }
     case 'workflow_prepare': {
+      assertTrustedAdaptiveRoutingHost('workflow_prepare')
       const callerContext = callerContextFor('workflow_prepare', args)
       return prepareWorkflow(
         core,
         routingAuthority,
         prepareInput(args),
-        { callerContext },
+        callerContext ? { callerContext } : {},
       )
     }
     case 'workflow_commit': {
+      assertTrustedAdaptiveRoutingHost('workflow_commit')
       const callerContext = callerContextFor('workflow_commit', args)
       const confirmationToken = optional(args.confirmationToken)
       return commitPreparedWorkflow(
@@ -186,7 +195,7 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
         object(args.proposal, 'proposal'),
         string(args.expectedHash, 'expectedHash'),
         {
-          callerContext,
+          ...(callerContext ? { callerContext } : {}),
           ...(confirmationToken ? { confirmationToken } : {}),
         },
       )
@@ -207,8 +216,24 @@ async function call(name: string, args: Record<string, unknown>): Promise<unknow
 function callerContextFor(
   toolName: RoutingWorkflowToolName,
   args: Record<string, unknown>,
-): RoutingCallerContext {
-  const callerToken = string(args.callerToken, 'callerToken')
+): RoutingCallerContext | undefined {
+  const callerToken = optional(args.callerToken)
+  if (!trustedAdaptiveRoutingHost) {
+    if (args.callerToken !== undefined) {
+      throw new Error(
+        `callerToken is a Claude Code Host proof and cannot authorize ${adapterId}`,
+      )
+    }
+    return undefined
+  }
+  if (!callerToken) {
+    if (callerAttestationRequired) {
+      throw new Error(
+        `${toolName} requires the Claude Code PreToolUse caller attestation`,
+      )
+    }
+    return undefined
+  }
   const toolInput = structuredClone(args)
   delete toolInput.callerToken
   return routingAuthority.consumeCallerAttestation(
@@ -217,11 +242,23 @@ function callerContextFor(
   )
 }
 
+function assertTrustedAdaptiveRoutingHost(toolName: RoutingWorkflowToolName): void {
+  if (trustedAdaptiveRoutingHost) return
+  throw new Error(
+    `Flowit Workflow ${toolName} is unavailable for ${adapterId}: this Host does not provide a trusted current-turn authority channel. Use workflow_assess as advisory only, or use dispatch and persistent Pipeline tools under Host-native approval.`,
+  )
+}
+
 function assessmentInput(args: Record<string, unknown>): TaskAssessmentRequest {
   const signals = args.signals === undefined
     ? undefined
     : object(args.signals, 'signals') as TaskAssessmentRequest['signals']
   const authorityToken = optional(args.authorityToken)
+  if (!trustedAdaptiveRoutingHost && args.authorityToken !== undefined) {
+    throw new Error(
+      `authorityToken is a Claude Code Host proof and cannot authorize ${adapterId}`,
+    )
+  }
   return {
     task: string(args.task, 'task'),
     ...(signals ? { signals } : {}),
@@ -391,7 +428,7 @@ function tools(): unknown[] {
     description:
       'Opaque current-caller proof injected by the Claude PreToolUse Hook. Models must not create or copy this field.',
   }
-  return [
+  const commonTools = [
     {
       name: 'sessions_list',
       description: 'List sessions visible through Flowit Workflow Agent adapters.',
@@ -440,49 +477,65 @@ function tools(): unknown[] {
         ['id', 'status'],
       ),
     },
-    {
-      name: 'workflow_assess',
-      description:
-        'Read-only adaptive routing assessment. Routing mode comes only from trusted process configuration. A Claude PreToolUse Hook proves the actual calling Session and UserPromptSubmit may supply an exact-task authority token.',
-      inputSchema: obj(
+  ]
+  const assessmentTool = trustedAdaptiveRoutingHost
+    ? {
+        name: 'workflow_assess',
+        description:
+          'Read-only adaptive routing assessment for 浮域 (Flowit Workflow). Routing mode comes only from trusted process configuration. A Claude PreToolUse Hook proves the actual calling Session and UserPromptSubmit may supply an exact-task authority token.',
+        inputSchema: obj(
+          {
+            task: { type: 'string' },
+            signals,
+            authorityToken: { type: 'string' },
+            callerToken,
+          },
+          ['task'],
+        ),
+      }
+    : {
+        name: 'workflow_assess',
+        description:
+          `Advisory read-only assessment for 浮域 (Flowit Workflow) on ${adapterId}. This Host does not provide trusted current-turn authority, so explicit wording is not treated as authorization and adaptive prepare/commit tools are intentionally unavailable. Use dispatch or persistent Pipeline tools under Host-native approval.`,
+        inputSchema: obj({ task: { type: 'string' }, signals }, ['task']),
+      }
+  const trustedAdaptiveTools = trustedAdaptiveRoutingHost
+    ? [
         {
-          task: { type: 'string' },
-          signals,
-          authorityToken: { type: 'string' },
-          callerToken,
+          name: 'workflow_prepare',
+          description:
+            'Read-only preparation of an expiring 2-6 node run-once proposal. It preflights either an existing Session or a dedicated Session plan; dedicated resources are not created until workflow_commit.',
+          inputSchema: obj(
+            {
+              assessmentToken: { type: 'string' },
+              target,
+              maxNodes: { type: 'integer', minimum: 2, maximum: 6 },
+              pipelineName: { type: 'string' },
+              callerToken,
+            },
+            ['assessmentToken', 'target'],
+          ),
         },
-        ['task'],
-      ),
-    },
-    {
-      name: 'workflow_prepare',
-      description:
-        'Read-only preparation of an expiring 2-6 node run-once proposal. It preflights either an existing Session or a dedicated Session plan; dedicated resources are not created until workflow_commit.',
-      inputSchema: obj(
         {
-          assessmentToken: { type: 'string' },
-          target,
-          maxNodes: { type: 'integer', minimum: 2, maximum: 6 },
-          pipelineName: { type: 'string' },
-          callerToken,
+          name: 'workflow_commit',
+          description:
+            'Revalidate an expiring signed proposal and execution preflight. Dedicated Sessions are provisioned only after exact user confirmation.',
+          inputSchema: obj(
+            {
+              proposal: { type: 'object' },
+              expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+              confirmationToken: { type: 'string' },
+              callerToken,
+            },
+            ['proposal', 'expectedHash'],
+          ),
         },
-        ['assessmentToken', 'target'],
-      ),
-    },
-    {
-      name: 'workflow_commit',
-      description:
-        'Revalidate an expiring signed proposal and execution preflight. Dedicated Sessions are provisioned only after exact user confirmation.',
-      inputSchema: obj(
-        {
-          proposal: { type: 'object' },
-          expectedHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
-          confirmationToken: { type: 'string' },
-          callerToken,
-        },
-        ['proposal', 'expectedHash'],
-      ),
-    },
+      ]
+    : []
+  return [
+    ...commonTools,
+    assessmentTool,
+    ...trustedAdaptiveTools,
     {
       name: 'workflow_run_get',
       description: 'Read the current status and node checkpoints of an adaptive run-once Pipeline.',
