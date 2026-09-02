@@ -25,6 +25,7 @@ jobs:
           node-version: 24
       - name: Apply review fixes
         run: |
+          sed -i 's/      const started = await prepared.client.request(/      const started: any = await prepared.client.request(/' .github/scripts/fix-pr38-review.py
           python .github/scripts/fix-pr38-review.py
           git diff --check
       - name: Validate full repository contract
