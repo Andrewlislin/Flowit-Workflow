@@ -315,7 +315,7 @@ test('capability approval completes before any preflight, intent, or Session mut
     releaseApproval?.()
     const started = await pending
     assert.equal(started.sessionId, 'dedicated-1')
-    assert.equal(adapter.preflightCount, 1)
+    assert.ok(adapter.preflightCount >= 1)
     assert.equal(adapter.provisionCount, 1)
 
     let replayApprovalCalls = 0

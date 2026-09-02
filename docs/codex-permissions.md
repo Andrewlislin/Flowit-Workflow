@@ -122,6 +122,8 @@ If the Host returns a weaker, broader or structurally different policy, Flowit f
 
 Every `turn/start` repeats the full bounded `sandboxPolicy`; later Pipeline nodes cannot silently drift to another permission profile.
 
+For both `readOnly` and `workspaceWrite`, `networkAccess` is an exact field: a Host response that is either broader or narrower than the approved value is rejected. `thread/start`, `thread/read`, and `thread/resume` must also report the exact approved `dedicatedCwd` before Skills are resolved or a turn begins. If an exact model is rerouted, Flowit immediately interrupts that specific turn rather than waiting for the replacement model to finish and applying a post-hoc error.
+
 Execution evidence records the requested and granted capabilities, sandbox mode, network flag, writable roots, grant source and envelope digest. This allows `run_once_get` and durable node checkpoints to distinguish user approval from model intent and Host enforcement.
 
 ## Failure behavior

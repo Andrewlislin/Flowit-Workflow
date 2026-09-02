@@ -64,6 +64,7 @@ export interface CodexPermissionEvidence {
   readonly grantedCapabilities: readonly AgentExecutionCapability[]
   readonly source: ExecutionGrantSource
   readonly scope: 'run'
+  readonly dedicatedCwd: string
   readonly sandboxMode: CodexSandboxMode
   readonly sandboxPolicy: CodexSandboxPolicy
   readonly approvalPolicy: 'never'
@@ -333,7 +334,7 @@ export function permissionEnvelopeForPlan(
 export function requiresInteractivePermissionApproval(
   envelope: CodexPermissionEnvelope,
 ): boolean {
-  return envelope.networkAccess || envelope.capabilities.includes('workspace-write')
+  return envelope.sandboxPolicy.networkAccess || envelope.capabilities.includes('workspace-write')
 }
 
 export function permissionApprovalMessage(
@@ -343,7 +344,7 @@ export function permissionApprovalMessage(
   const fileAccess = envelope.capabilities.includes('workspace-write')
     ? `只允许写入 ${envelope.dedicatedCwd}`
     : '只读，不允许写入工作区'
-  const network = envelope.networkAccess ? '允许网络访问' : '不允许网络访问'
+  const network = envelope.sandboxPolicy.networkAccess ? '允许网络访问' : '不允许网络访问'
   return [
     '浮域（Flowit Workflow）准备创建一个新的专用 Codex Session。',
     `任务：${plan.input.name}`,
@@ -390,6 +391,7 @@ function evidence(
     grantedCapabilities: [...envelope.capabilities],
     source: payload.source,
     scope: 'run',
+    dedicatedCwd: envelope.dedicatedCwd,
     sandboxMode: envelope.sandboxMode,
     sandboxPolicy: structuredClone(envelope.sandboxPolicy),
     approvalPolicy: 'never',

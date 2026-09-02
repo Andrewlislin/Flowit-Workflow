@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { AgentExecutionError } from '@coaseedgeltd/flowit-core'
 import type {
   AgentDispatchRequest,
@@ -35,11 +36,12 @@ export type CodexGrantedSandboxPolicy =
       readonly excludeSlashTmp: true
     }
 
-export interface CodexPermissionEvidence {
+export interface CodexAdapterPermissionEvidence {
   readonly requestedCapabilities: readonly AgentExecutionCapability[]
   readonly grantedCapabilities: readonly AgentExecutionCapability[]
   readonly source: 'mcp-elicitation' | 'bounded-readonly-default'
   readonly scope: 'run'
+  readonly dedicatedCwd: string
   readonly sandboxMode: 'read-only' | 'workspace-write'
   readonly sandboxPolicy: CodexGrantedSandboxPolicy
   readonly approvalPolicy: 'never'
@@ -55,7 +57,7 @@ export type CodexPermissionGrantVerifier = (
     readonly session: AgentExecutionPreflightRequest['session']
     readonly requirement: AgentExecutionPreflightRequest['requirement']
   },
-) => CodexPermissionEvidence
+) => CodexAdapterPermissionEvidence
 
 export interface FlowitCodexAdapterConfig extends CodexAdapterConfig {
   readonly permissionGrantVerifier?: CodexPermissionGrantVerifier
@@ -76,7 +78,7 @@ interface PermissionClient {
 
 interface PreparedPermissionExecution extends PermissionClient {
   readonly runtime: ResolvedRuntime
-  readonly permissions: CodexPermissionEvidence
+  readonly permissions: CodexAdapterPermissionEvidence
 }
 
 /**
@@ -117,7 +119,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     signal?: AbortSignal,
   ): Promise<AgentExecutionPreflightResult> {
     if (!hasCapabilities(request)) return super.preflightExecution(request, signal)
-    let permissions: CodexPermissionEvidence
+    let permissions: CodexAdapterPermissionEvidence
     try {
       permissions = this.verifyPermissionGrant(request)
       const prepared = request.session.kind === 'existing'
@@ -200,12 +202,13 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     }
     try {
       assertHostPolicy(response, permissions, 'thread/start')
+      const cwd = assertHostCwd(response, permissions, 'thread/start')
       const runtime = runtimeFromHostResponse(response, request.requirement.runtime)
       assertRuntimeMatch(request.requirement.runtime, runtime)
       const session: AgentSessionDescriptor = {
         adapterId: this.id,
         sessionId,
-        cwd: firstString(response?.cwd, thread?.cwd) ?? request.session.cwd,
+        cwd,
         status: isThreadRunning(thread) ? 'live' : 'idle',
         name: firstString(thread?.name) ?? 'Flowit dedicated Codex Session',
       }
@@ -305,7 +308,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     }
     const resumedRuntime = runtimeFromHostResponse(resumed, request.execution?.runtime)
     assertRuntimeMatch(request.execution?.runtime, resumedRuntime)
-    const cwd = firstString(resumed?.cwd, thread?.cwd) ?? this.flowitConfig.cwd ?? process.cwd()
+    const cwd = assertHostCwd(resumed, permissions, 'thread/resume')
     const skills = await this.resolvePermissionSkills(
       prepared.client,
       request.skills,
@@ -320,15 +323,67 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     }
 
     const reroutes: ModelRerouteRecord[] = []
-    let turnId: string | undefined
+    let activeTurnId: string | undefined
+    let violationResolved = false
+    let resolveViolation:
+      | ((value: {
+          error: AgentExecutionError
+          interrupt: Promise<void>
+        }) => void)
+      | undefined
+    const violationPromise = new Promise<{
+      error: AgentExecutionError
+      interrupt: Promise<void>
+    }>(resolve => {
+      resolveViolation = resolve
+    })
+    const signalExactRerouteViolation = (
+      reroute: ModelRerouteRecord,
+    ): void => {
+      const requestedModel = request.execution?.runtime?.match === 'exact'
+        ? request.execution.runtime.model
+        : undefined
+      const violatingTurnId = activeTurnId
+      if (
+        violationResolved ||
+        !requestedModel ||
+        !violatingTurnId ||
+        reroute.turnId !== violatingTurnId ||
+        reroute.toModel === requestedModel
+      ) {
+        return
+      }
+      violationResolved = true
+      const error = new AgentExecutionError(
+        'MODEL_UNAVAILABLE',
+        `Codex rerouted exact model ${requestedModel} from ${reroute.fromModel} to ${reroute.toModel}`,
+        false,
+      )
+      const interrupt = prepared.client
+        .request(
+          'turn/interrupt',
+          { threadId: request.sessionId, turnId: violatingTurnId },
+          undefined,
+          5_000,
+        )
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+      resolveViolation?.({ error, interrupt })
+    }
     const stopReroutes = prepared.client.onNotification((method, params) => {
       if (method !== 'model/rerouted') return
-      const parsed = parseModelReroute(params)
-      if (parsed?.threadId === request.sessionId) reroutes.push(parsed)
+      const reroute = parseModelReroute(params)
+      if (reroute?.threadId !== request.sessionId) return
+      reroutes.push(reroute)
+      signalExactRerouteViolation(reroute)
     })
-    let started: any
+    let turnId: string | undefined
+    let completion: any
+    let interruptedForViolation = false
     try {
-      started = await prepared.client.request(
+      const started: any = await prepared.client.request(
         'turn/start',
         {
           threadId: request.sessionId,
@@ -353,17 +408,31 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
           false,
         )
       }
-      const completion = await prepared.client.waitFor(
-        'turn/completed',
-        params =>
-          firstString(params?.threadId, params?.thread_id) === request.sessionId &&
-          firstString(params?.turn?.id, params?.turnId) === turnId,
-        signal,
-        this.turnTimeoutMs,
-      )
+      activeTurnId = turnId
+      for (const reroute of reroutes) signalExactRerouteViolation(reroute)
+      const outcome = await Promise.race([
+        prepared.client.waitFor(
+          'turn/completed',
+          params =>
+            firstString(params?.threadId, params?.thread_id) === request.sessionId &&
+            firstString(params?.turn?.id, params?.turnId) === turnId,
+          signal,
+          this.turnTimeoutMs,
+        ).then(value => ({ kind: 'completed' as const, value })),
+        violationPromise.then(value => ({
+          kind: 'contract-violation' as const,
+          value,
+        })),
+      ])
+      if (outcome.kind === 'contract-violation') {
+        interruptedForViolation = true
+        await outcome.value.interrupt
+        throw outcome.value.error
+      }
+      completion = outcome.value
       assertSuccessfulTurn(completion?.turn, request.sessionId, turnId)
     } catch (error: unknown) {
-      if (turnId) {
+      if (turnId && !interruptedForViolation) {
         await prepared.client
           .request(
             'turn/interrupt',
@@ -425,7 +494,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
 
   private async prepareDedicated(
     request: AgentExecutionPreflightRequest,
-    permissions: CodexPermissionEvidence,
+    permissions: CodexAdapterPermissionEvidence,
     signal?: AbortSignal,
   ): Promise<PreparedPermissionExecution> {
     if (request.session.kind !== 'dedicated') {
@@ -451,7 +520,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
 
   private async prepareExisting(
     request: AgentExecutionPreflightRequest,
-    permissions: CodexPermissionEvidence,
+    permissions: CodexAdapterPermissionEvidence,
     signal?: AbortSignal,
   ): Promise<PreparedPermissionExecution> {
     if (request.session.kind !== 'existing') {
@@ -488,7 +557,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
         true,
       )
     }
-    const cwd = descriptor.cwd ?? permissions.writableRoots[0] ?? this.flowitConfig.cwd ?? process.cwd()
+    const cwd = assertHostCwd(snapshot, permissions, 'thread/read')
     await this.resolvePermissionSkills(
       selected.client,
       request.skills,
@@ -500,7 +569,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
 
   private verifyPermissionGrant(
     request: AgentExecutionPreflightRequest,
-  ): CodexPermissionEvidence {
+  ): CodexAdapterPermissionEvidence {
     const verifier = this.flowitConfig.permissionGrantVerifier
     if (!verifier) {
       throw new AgentExecutionError(
@@ -530,7 +599,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     signal?: AbortSignal,
   ): Promise<PermissionClient & { runtime: ResolvedRuntime }> {
     const errors: Error[] = []
-    for (const executable of this.executableCandidates(preferredExecutable)) {
+    for (const executable of this.permissionExecutableCandidates(preferredExecutable)) {
       try {
         const client = await this.permissionClient(executable, signal)
         const runtime = await resolveRuntime(client, requirement, executable, signal)
@@ -552,7 +621,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
   ): Promise<PermissionClient & { runtime: ResolvedRuntime }> {
     const errors: Error[] = []
     const preferred = this.permissionSessionExecutables.get(sessionId)
-    for (const executable of this.executableCandidates(preferred)) {
+    for (const executable of this.permissionExecutableCandidates(preferred)) {
       try {
         const client = await this.permissionClient(executable, signal)
         await client.request(
@@ -573,7 +642,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     )
   }
 
-  private executableCandidates(preferred?: string): string[] {
+  private permissionExecutableCandidates(preferred?: string): string[] {
     return [...new Set([
       preferred,
       ...(this.flowitConfig.executableCandidates ?? []),
@@ -670,7 +739,7 @@ function hasCapabilitiesInDispatch(request: AgentDispatchRequest): boolean {
 function threadParams(
   cwd: string,
   runtime: ResolvedRuntime,
-  permissions: CodexPermissionEvidence,
+  permissions: CodexAdapterPermissionEvidence,
 ): Record<string, unknown> {
   return {
     cwd,
@@ -680,7 +749,7 @@ function threadParams(
 
 function threadOverrides(
   runtime: ResolvedRuntime,
-  permissions: CodexPermissionEvidence,
+  permissions: CodexAdapterPermissionEvidence,
 ): Record<string, unknown> {
   return {
     ...(runtime.actualModel ? { model: runtime.actualModel } : {}),
@@ -701,7 +770,7 @@ function threadOverrides(
 }
 
 function sandboxConfig(
-  permissions: CodexPermissionEvidence,
+  permissions: CodexAdapterPermissionEvidence,
 ): Record<string, unknown> {
   if (permissions.sandboxPolicy.type !== 'workspaceWrite') return {}
   return {
@@ -716,7 +785,7 @@ function sandboxConfig(
 
 function assertHostPolicy(
   response: any,
-  permissions: CodexPermissionEvidence,
+  permissions: CodexAdapterPermissionEvidence,
   operation: string,
 ): void {
   if (response?.approvalPolicy !== 'never') {
@@ -742,6 +811,13 @@ function assertHostPolicy(
       false,
     )
   }
+  if (actual.networkAccess !== expected.networkAccess) {
+    throw new AgentExecutionError(
+      'PERMISSION_UNAVAILABLE',
+      `${operation} returned networkAccess ${JSON.stringify(actual.networkAccess)} instead of ${expected.networkAccess}`,
+      false,
+    )
+  }
   if (expected.type === 'workspaceWrite') {
     if (
       actual.networkAccess !== expected.networkAccess ||
@@ -756,6 +832,31 @@ function assertHostPolicy(
       )
     }
   }
+}
+
+function assertHostCwd(
+  response: any,
+  permissions: CodexAdapterPermissionEvidence,
+  operation: string,
+): string {
+  const reported = firstString(response?.cwd, response?.thread?.cwd)
+  if (!reported) {
+    throw new AgentExecutionError(
+      'HOST_VERSION_INCOMPATIBLE',
+      `${operation} did not report the active Codex working directory`,
+      false,
+    )
+  }
+  const actual = path.resolve(reported)
+  const expected = path.resolve(permissions.dedicatedCwd)
+  if (actual !== expected) {
+    throw new AgentExecutionError(
+      'PERMISSION_UNAVAILABLE',
+      `${operation} returned working directory ${JSON.stringify(actual)} instead of approved dedicatedCwd ${JSON.stringify(expected)}`,
+      false,
+    )
+  }
+  return actual
 }
 
 async function resolveRuntime(
@@ -970,7 +1071,7 @@ function evidenceFor(
   runtime: ResolvedRuntime,
   executable?: string,
   info?: any,
-  permissions?: CodexPermissionEvidence,
+  permissions?: CodexAdapterPermissionEvidence,
   sessionId?: string,
 ): AgentExecutionEvidence {
   return {
@@ -1003,17 +1104,17 @@ function evidenceFor(
 
 function permissionEvidenceFrom(
   evidence: AgentExecutionEvidence | undefined,
-): CodexPermissionEvidence | undefined {
+): CodexAdapterPermissionEvidence | undefined {
   if (!evidence || typeof evidence !== 'object') return undefined
   const value = (evidence as AgentExecutionEvidence & {
-    permissions?: CodexPermissionEvidence
+    permissions?: CodexAdapterPermissionEvidence
   }).permissions
   return value?.verified === true ? value : undefined
 }
 
-function safePermissionEvidence(error: unknown): CodexPermissionEvidence | undefined {
+function safePermissionEvidence(error: unknown): CodexAdapterPermissionEvidence | undefined {
   if (!error || typeof error !== 'object') return undefined
-  const value = (error as { permissions?: CodexPermissionEvidence }).permissions
+  const value = (error as { permissions?: CodexAdapterPermissionEvidence }).permissions
   return value?.verified === true ? value : undefined
 }
 

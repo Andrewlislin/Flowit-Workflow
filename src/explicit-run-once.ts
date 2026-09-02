@@ -11,7 +11,6 @@ import type {
   AgentExecutionEvidence,
   AgentExecutionPreflightRequest,
   AgentExecutionRequirement,
-  AgentRuntimeRequirement,
   AgentSessionDescriptor,
   AutomationRunNodeResult,
   AutomationRunRecord,
@@ -63,10 +62,7 @@ export interface NormalizedExplicitRunOnceInput {
     readonly adapterId: string
     readonly dedicatedCwd: string
     readonly skills: readonly string[]
-    readonly execution?: {
-      readonly runtime?: AgentRuntimeRequirement
-      readonly requiredCapabilities?: readonly AgentExecutionCapability[]
-    }
+    readonly execution?: AgentExecutionRequirement
   }
   readonly steps: readonly ExplicitRunOnceStepInput[]
 }
@@ -449,6 +445,7 @@ async function admitProvisioned(
   assertIntentMatchesPlan(intent, plan)
   const provisioned = intent.provisioned
   if (!provisioned) throw new Error('provisioned intent has no Host Session evidence')
+  assertProvisionedSessionCwd(provisioned.session, plan)
   const sessionId = requiredString(
     provisioned.session.sessionId,
     'journaled provisioned Session id',
@@ -538,6 +535,7 @@ function assertProvisionedSession(
     )
   }
   requiredString(session.sessionId, 'provisioned Session id')
+  assertProvisionedSessionCwd(session, plan)
   if (session.status === 'ended' || session.status === 'unknown') {
     throw new Error(
       `provisioned Session ${session.adapterId}:${session.sessionId} is not executable (${session.status})`,
@@ -555,6 +553,22 @@ function assertProvisionedSession(
   ) {
     throw new Error(
       `provisioned Session ${session.adapterId}:${session.sessionId} cannot be resumed or dispatched`,
+    )
+  }
+}
+
+function assertProvisionedSessionCwd(
+  session: AgentSessionDescriptor,
+  plan: ExplicitRunOncePlan,
+): void {
+  const actual = path.resolve(requiredString(
+    session.cwd,
+    'provisioned Session working directory',
+  ))
+  const expected = plan.input.target.dedicatedCwd
+  if (actual !== expected) {
+    throw permissionError(
+      `provisioned Session working directory ${JSON.stringify(actual)} differs from approved dedicatedCwd ${JSON.stringify(expected)}`,
     )
   }
 }
