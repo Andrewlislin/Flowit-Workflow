@@ -30,6 +30,12 @@ text = replace_once(
 )
 text = replace_once(
     text,
+    "    throw contextualizeProtocolError(\n      new AggregateError(errors, `no Codex executable could read Session ${sessionId}`),\n      `Codex Session ${sessionId} is unavailable`,\n    )\n",
+    "    const permissionFailure = errors.find(error =>\n      error instanceof AgentExecutionError && error.code === 'PERMISSION_UNAVAILABLE',\n    )\n    if (permissionFailure) throw permissionFailure\n    throw contextualizeProtocolError(\n      new AggregateError(errors, `no Codex executable could read Session ${sessionId}`),\n      `Codex Session ${sessionId} is unavailable`,\n    )\n",
+    'permission failure classification',
+)
+text = replace_once(
+    text,
     "      .catch(() => undefined)\n    const outputSummary = snapshot && turnId\n",
     "      .catch(() => undefined)\n    if (snapshot) assertHostCwd(snapshot, permissions, 'thread/read')\n    const outputSummary = snapshot && turnId\n",
     'post-turn read cwd',
