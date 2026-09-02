@@ -15,6 +15,7 @@ Use this checklist when reviewing changes to explicit Flowit run permissions.
 - An approved network-enabled read-only run may bootstrap as the stable offline `readOnly` lifecycle, but no task work begins before `turn/start`.
 - Every `turn/start` repeats the exact approved structured sandbox policy, including `readOnly(networkAccess=true)`.
 - The pinned Codex v0.152.0 schema fixture and outbound-request regression remain in sync.
+- When the supported Codex version changes, refresh the pinned upstream schema commit and rerun the lifecycle-to-turn compatibility contract before changing these assertions.
 - Workspace-write roots contain only the normalized dedicated working directory.
 - `danger-full-access`, browser authorization, arbitrary roots, and automatic approval escalation remain impossible.
 - Host-returned lifecycle sandbox and approval evidence is checked before Run admission without demanding a state the lifecycle request cannot express.
