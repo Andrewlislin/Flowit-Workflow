@@ -26,28 +26,6 @@ jobs:
       - name: Apply exhaustive CWD verification
         run: |
           python .github/scripts/strengthen-pr38-cwd.py
-          python - <<'PY'
-          from pathlib import Path
-          path = Path('packages/adapter-codex/src/public.ts')
-          text = path.read_text()
-          old = """    throw contextualizeProtocolError(
-      new AggregateError(errors, `no Codex executable could read Session ${sessionId}`),
-      `Codex Session ${sessionId} is unavailable`,
-    )
-"""
-          new = """    const permissionFailure = errors.find(error =>
-      error instanceof AgentExecutionError && error.code === 'PERMISSION_UNAVAILABLE',
-    )
-    if (permissionFailure) throw permissionFailure
-    throw contextualizeProtocolError(
-      new AggregateError(errors, `no Codex executable could read Session ${sessionId}`),
-      `Codex Session ${sessionId} is unavailable`,
-    )
-"""
-          if text.count(old) != 1:
-              raise SystemExit('permission failure classification block not found')
-          path.write_text(text.replace(old, new, 1))
-          PY
           git diff --check
       - name: Validate full repository contract
         run: |
