@@ -49,6 +49,7 @@ jobs:
               text = path.read_text()
               updated = text.replace(old, new)
               updated = updated.replace('v0.5.0--beta.3', 'v0.5.0--beta.4')
+              updated = updated.replace(r'v0\.5\.0-beta\.3', r'v0\.5\.0-beta\.4')
               if updated == text:
                   raise SystemExit(f'expected version replacement in {rel}')
               path.write_text(updated)
