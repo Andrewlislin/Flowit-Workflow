@@ -38,11 +38,19 @@ jobs:
           block = source[start:end]
           lines = [line[10:] if line.startswith('          ') else line for line in block.splitlines()]
           code = '\n'.join(lines) + '\n'
-          old = "if old_doctor not in text:\n    raise SystemExit('provider doctor block not found')\ntext = text.replace(old_doctor, new_doctor)"
-          new = "doctor_start = text.index('      const checks = claudeCodeDoctorChecks(options, state)')\ndoctor_end = text.index('    } catch (error: unknown)', doctor_start)\ntext = text[:doctor_start] + new_doctor + '\\n' + text[doctor_end:]"
-          if old not in code:
+
+          doctor_old = "if old_doctor not in text:\n    raise SystemExit('provider doctor block not found')\ntext = text.replace(old_doctor, new_doctor)"
+          doctor_new = "doctor_start = text.index('      const checks = claudeCodeDoctorChecks(options, state)')\ndoctor_end = text.index('    } catch (error: unknown)', doctor_start)\ntext = text[:doctor_start] + new_doctor + '\\n' + text[doctor_end:]"
+          if doctor_old not in code:
               raise SystemExit('staged provider doctor patch block not found')
-          code = code.replace(old, new)
+          code = code.replace(doctor_old, doctor_new)
+
+          status_old = "if old_status not in text:\n    raise SystemExit('provider apply status block not found')\ntext = text.replace(old_status, new_status)"
+          status_new = "status_start = text.index('    const doctor = await this.doctor(context, options)')\nstatus_end = text.index('      appliedActions: applied,', status_start)\ntext = text[:status_start] + new_status + '\\n' + text[status_end:]"
+          if status_old not in code:
+              raise SystemExit('staged provider status patch block not found')
+          code = code.replace(status_old, status_new)
+
           script = Path('/tmp/build-claude-doctor.py')
           script.write_text(code)
           subprocess.run(['python', str(script)], check=True)
