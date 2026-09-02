@@ -1,0 +1,42 @@
+name: apply PR38 review fixes
+
+on:
+  push:
+    branches:
+      - feat/codex-approved-permission-envelopes
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/codex-approved-permission-envelopes
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply review fixes
+        run: |
+          python .github/scripts/fix-pr38-review.py
+          git diff --check
+      - name: Validate full repository contract
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          pnpm check
+      - name: Commit validated review fixes
+        run: |
+          rm .github/scripts/fix-pr38-review.py
+          rm .github/workflows/zz-fix-pr38-review.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(codex): enforce exact permission and runtime contracts'
+          git push origin HEAD:feat/codex-approved-permission-envelopes
