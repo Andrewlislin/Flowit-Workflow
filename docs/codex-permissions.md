@@ -122,7 +122,7 @@ If the Host returns a weaker, broader or structurally different policy, Flowit f
 
 Every `turn/start` repeats the full bounded `sandboxPolicy`; later Pipeline nodes cannot silently drift to another permission profile.
 
-For both `readOnly` and `workspaceWrite`, `networkAccess` is an exact field: a Host response that is either broader or narrower than the approved value is rejected. `thread/start`, `thread/read`, and `thread/resume` must also report the exact approved `dedicatedCwd` before Skills are resolved or a turn begins. If an exact model is rerouted, Flowit immediately interrupts that specific turn rather than waiting for the replacement model to finish and applying a post-hoc error.
+For both `readOnly` and `workspaceWrite`, `networkAccess` is an exact field: a Host response that is either broader or narrower than the approved value is rejected. `thread/start`, every permission-bound `thread/read` (including executable probing and post-turn readback), and `thread/resume` must report the exact approved `dedicatedCwd`. A mismatch keeps the deterministic `PERMISSION_UNAVAILABLE` classification instead of being wrapped as a retryable Host outage. If an exact model is rerouted, Flowit immediately interrupts that specific turn rather than waiting for the replacement model to finish and applying a post-hoc error.
 
 Execution evidence records the requested and granted capabilities, sandbox mode, network flag, writable roots, grant source and envelope digest. This allows `run_once_get` and durable node checkpoints to distinguish user approval from model intent and Host enforcement.
 
@@ -134,7 +134,8 @@ The Host contract suite preserves the execution-side invariants independently of
 readOnly offline approved → Host reports network on  → reject and archive
 readOnly online approved  → Host reports network off → reject and archive
 approved dedicatedCwd     → thread/start cwd drifts   → reject before Run admission
-approved dedicatedCwd     → thread/read/resume drifts → reject before Skills or turn/start
+approved dedicatedCwd     → any thread/read drifts    → reject before Skills or turn/start
+approved dedicatedCwd     → thread/resume cwd drifts  → reject before turn/start
 exact model X             → Host reroutes X to Y      → interrupt the exact turn before completion
 journaled Session cwd      → differs after restart     → refuse recovery admission
 ```
