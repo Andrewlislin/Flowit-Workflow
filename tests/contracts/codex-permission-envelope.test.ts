@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -18,6 +19,40 @@ import {
 } from '../../src/explicit-run-once.js'
 
 const SECRET = 'codex-permission-contract-secret-at-least-32-bytes'
+
+interface CodexSandboxContractFixture {
+  readonly source: {
+    readonly repository: string
+    readonly tag: string
+    readonly commit: string
+  }
+  readonly threadLifecycle: {
+    readonly methods: readonly string[]
+    readonly requestFields: readonly string[]
+    readonly sandboxField: string
+    readonly sandboxType: string
+    readonly structuredSandboxPolicyField: null
+    readonly readOnlyNetworkConfigField: null
+    readonly workspaceWriteConfigField: string
+    readonly readOnlyDefault: {
+      readonly type: 'readOnly'
+      readonly networkAccess: false
+    }
+  }
+  readonly turnStart: {
+    readonly method: 'turn/start'
+    readonly structuredSandboxPolicyField: 'sandboxPolicy'
+    readonly appliesTo: 'current-and-subsequent-turns'
+  }
+}
+
+const CODEX_SANDBOX_CONTRACT = JSON.parse(readFileSync(
+  new URL(
+    '../fixtures/codex-app-server-v0.152.0-sandbox-contract.json',
+    import.meta.url,
+  ),
+  'utf8',
+)) as CodexSandboxContractFixture
 
 function explicitInput(
   cwd: string,
@@ -81,7 +116,7 @@ function permissionEvidence(
 
 interface FakeOptions {
   readonly hostCwd: string
-  readonly networkAccess: boolean
+  readonly readOnlyNetworkOverride?: boolean
   readonly reroute?: boolean
   readonly completionDelayMs?: number
   readonly name: string
@@ -114,24 +149,30 @@ const fs = require('node:fs');
 const readline = require('node:readline');
 const marker = ${JSON.stringify(marker)};
 const hostCwd = ${JSON.stringify(path.resolve(options.hostCwd))};
-const hostNetwork = ${JSON.stringify(options.networkAccess)};
+const readOnlyNetworkOverride = ${JSON.stringify(options.readOnlyNetworkOverride)};
 const reroute = ${JSON.stringify(options.reroute === true)};
 const completionDelayMs = ${JSON.stringify(options.completionDelayMs ?? 0)};
 const models = ${JSON.stringify(models)};
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 const record = (name, params) => fs.appendFileSync(marker, JSON.stringify({ name, params }) + '\\n');
-const sandbox = params => {
+const lifecycleSandbox = params => {
   if (params && params.sandbox === 'workspace-write') {
+    const configured = params.config && params.config.sandbox_workspace_write;
     return {
       type: 'workspaceWrite',
-      writableRoots: [hostCwd],
-      networkAccess: hostNetwork,
-      excludeTmpdirEnvVar: true,
-      excludeSlashTmp: true,
+      writableRoots: configured && Array.isArray(configured.writable_roots)
+        ? configured.writable_roots
+        : [],
+      networkAccess: Boolean(configured && configured.network_access),
+      excludeTmpdirEnvVar: Boolean(configured && configured.exclude_tmpdir_env_var),
+      excludeSlashTmp: Boolean(configured && configured.exclude_slash_tmp),
     };
   }
-  return { type: 'readOnly', networkAccess: hostNetwork };
+  return {
+    type: 'readOnly',
+    networkAccess: readOnlyNetworkOverride === true,
+  };
 };
 let turn = 0;
 rl.on('line', line => {
@@ -150,7 +191,7 @@ rl.on('line', line => {
       model: msg.params && msg.params.model,
       reasoningEffort: effort,
       approvalPolicy: 'never',
-      sandbox: sandbox(msg.params),
+      sandbox: lifecycleSandbox(msg.params),
     } });
   }
   if (msg.method === 'thread/read') {
@@ -170,7 +211,7 @@ rl.on('line', line => {
       model: msg.params && msg.params.model,
       reasoningEffort: effort,
       approvalPolicy: 'never',
-      sandbox: sandbox(msg.params),
+      sandbox: lifecycleSandbox(msg.params),
     } });
   }
   if (msg.method === 'turn/start') {
@@ -220,6 +261,47 @@ function permissionError(error: unknown): true {
   return true
 }
 
+test('pinned Codex 0.152.0 schema separates lifecycle mode from turn policy', () => {
+  assert.equal(CODEX_SANDBOX_CONTRACT.source.repository, 'openai/codex')
+  assert.equal(CODEX_SANDBOX_CONTRACT.source.tag, 'rust-v0.152.0')
+  assert.equal(
+    CODEX_SANDBOX_CONTRACT.source.commit,
+    '316795b3cf2a45e90d121d9f46499d4658b2645c',
+  )
+  assert.deepEqual(
+    CODEX_SANDBOX_CONTRACT.threadLifecycle.methods,
+    ['thread/start', 'thread/resume'],
+  )
+  assert.deepEqual(
+    CODEX_SANDBOX_CONTRACT.threadLifecycle.requestFields,
+    ['sandbox', 'config'],
+  )
+  assert.equal(
+    CODEX_SANDBOX_CONTRACT.threadLifecycle.structuredSandboxPolicyField,
+    null,
+  )
+  assert.equal(
+    CODEX_SANDBOX_CONTRACT.threadLifecycle.readOnlyNetworkConfigField,
+    null,
+  )
+  assert.equal(
+    CODEX_SANDBOX_CONTRACT.threadLifecycle.workspaceWriteConfigField,
+    'sandbox_workspace_write',
+  )
+  assert.deepEqual(
+    CODEX_SANDBOX_CONTRACT.threadLifecycle.readOnlyDefault,
+    { type: 'readOnly', networkAccess: false },
+  )
+  assert.equal(
+    CODEX_SANDBOX_CONTRACT.turnStart.structuredSandboxPolicyField,
+    'sandboxPolicy',
+  )
+  assert.equal(
+    CODEX_SANDBOX_CONTRACT.turnStart.appliesTo,
+    'current-and-subsequent-turns',
+  )
+})
+
 test('permission envelope and signed evidence use the current exact contract', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-permission-envelope-contract-'))
   try {
@@ -250,47 +332,96 @@ test('permission envelope and signed evidence use the current exact contract', a
   }
 })
 
-test('read-only policy verification rejects network drift in both directions', async () => {
-  const scenarios = [
-    { approved: false, actual: true, name: 'offline-to-online' },
-    { approved: true, actual: false, name: 'online-to-offline' },
-  ]
-  for (const scenario of scenarios) {
-    const root = await mkdtemp(path.join(os.tmpdir(), `flowit-${scenario.name}-`))
-    const fake = await fakeCodex(root, {
-      hostCwd: root,
-      networkAccess: scenario.actual,
-      name: scenario.name,
+test('offline read-only grant rejects a broader online lifecycle policy', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-offline-to-online-'))
+  const fake = await fakeCodex(root, {
+    hostCwd: root,
+    readOnlyNetworkOverride: true,
+    name: 'offline-to-online',
+  })
+  const adapter = new CodexAgentAdapter({
+    executable: fake.executable,
+    requestTimeoutMs: 5_000,
+    permissionGrantVerifier: () => permissionEvidence(root, false),
+  })
+  try {
+    await assert.rejects(
+      adapter.provisionSession({
+        correlationId: 'offline-to-online',
+        session: { kind: 'dedicated', cwd: root },
+        requirement: { requiredCapabilities: ['workspace-read'] },
+        skills: [],
+      }),
+      (error: unknown) => {
+        permissionError(error)
+        assert.match((error as Error).message, /networkAccess|online/i)
+        return true
+      },
+    )
+    const names = (await recorded(fake.marker)).map(row => row.name)
+    assert.equal(names.includes('thread/archive'), true)
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('online read-only grant accepts offline lifecycle bootstrap and starts an exact online turn', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-readonly-network-'))
+  const fake = await fakeCodex(root, {
+    hostCwd: root,
+    name: 'read-only-network-lifecycle',
+  })
+  const adapter = new CodexAgentAdapter({
+    executable: fake.executable,
+    requestTimeoutMs: 5_000,
+    permissionGrantVerifier: () => permissionEvidence(root, true),
+  })
+  try {
+    const provisioned = await adapter.provisionSession({
+      correlationId: 'read-only-network-provision',
+      session: { kind: 'dedicated', cwd: root },
+      requirement: {
+        requiredCapabilities: ['workspace-read', 'network'],
+      },
+      skills: [],
     })
-    const adapter = new CodexAgentAdapter({
-      executable: fake.executable,
-      requestTimeoutMs: 5_000,
-      permissionGrantVerifier: () => permissionEvidence(root, scenario.approved),
+    await adapter.dispatch({
+      correlationId: 'read-only-network-dispatch',
+      sessionId: provisioned.session.sessionId,
+      prompt: 'perform network-backed read-only research',
+      skills: [],
+      contextRefs: [],
+      execution: {
+        requiredCapabilities: ['workspace-read', 'network'],
+      },
     })
-    try {
-      await assert.rejects(
-        adapter.provisionSession({
-          correlationId: scenario.name,
-          session: { kind: 'dedicated', cwd: root },
-          requirement: {
-            requiredCapabilities: scenario.approved
-              ? ['workspace-read', 'network']
-              : ['workspace-read'],
-          },
-          skills: [],
-        }),
-        (error: unknown) => {
-          permissionError(error)
-          assert.match((error as Error).message, /networkAccess/i)
-          return true
-        },
+
+    const rows = await recorded(fake.marker)
+    const threadStart = rows.find(row => row.name === 'thread/start')
+    const threadResume = rows.find(row => row.name === 'thread/resume')
+    const turnStart = rows.find(row => row.name === 'turn/start')
+    assert.ok(threadStart)
+    assert.ok(threadResume)
+    assert.ok(turnStart)
+
+    for (const lifecycle of [threadStart, threadResume]) {
+      assert.equal(lifecycle.params.sandbox, 'read-only')
+      assert.equal(lifecycle.params.approvalPolicy, 'never')
+      assert.equal('sandboxPolicy' in lifecycle.params, false)
+      assert.equal(
+        Boolean(lifecycle.params.config?.sandbox_workspace_write),
+        false,
       )
-      const names = (await recorded(fake.marker)).map(row => row.name)
-      assert.equal(names.includes('thread/archive'), true)
-    } finally {
-      await adapter.dispose()
-      await rm(root, { recursive: true, force: true })
     }
+    assert.equal(turnStart.params.approvalPolicy, 'never')
+    assert.deepEqual(
+      turnStart.params.sandboxPolicy,
+      { type: 'readOnly', networkAccess: true },
+    )
+  } finally {
+    await adapter.dispose()
+    await rm(root, { recursive: true, force: true })
   }
 })
 
@@ -300,7 +431,6 @@ test('approved dedicated cwd is enforced on provisioning and existing-session re
   const different = path.join(root, 'different')
   const provisionFake = await fakeCodex(root, {
     hostCwd: different,
-    networkAccess: false,
     name: 'provision-cwd-drift',
   })
   const provisionAdapter = new CodexAgentAdapter({
@@ -332,7 +462,6 @@ test('approved dedicated cwd is enforced on provisioning and existing-session re
 
   const dispatchFake = await fakeCodex(root, {
     hostCwd: different,
-    networkAccess: false,
     name: 'dispatch-cwd-drift',
   })
   const dispatchAdapter = new CodexAgentAdapter({
@@ -370,7 +499,6 @@ test('permission path interrupts an exact-model reroute before completion', asyn
   const root = await mkdtemp(path.join(os.tmpdir(), 'flowit-permission-reroute-'))
   const fake = await fakeCodex(root, {
     hostCwd: root,
-    networkAccess: false,
     reroute: true,
     completionDelayMs: 300,
     name: 'permission-exact-reroute',

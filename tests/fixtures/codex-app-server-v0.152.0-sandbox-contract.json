@@ -1,0 +1,37 @@
+{
+  "source": {
+    "repository": "openai/codex",
+    "tag": "rust-v0.152.0",
+    "commit": "316795b3cf2a45e90d121d9f46499d4658b2645c",
+    "schemaRoot": "codex-rs/app-server-protocol/schema/typescript/v2",
+    "threadStart": "ThreadStartParams.ts",
+    "threadResume": "ThreadResumeParams.ts",
+    "turnStart": "TurnStartParams.ts",
+    "sandboxPolicy": "SandboxPolicy.ts",
+    "config": "Config.ts"
+  },
+  "threadLifecycle": {
+    "methods": [
+      "thread/start",
+      "thread/resume"
+    ],
+    "requestFields": [
+      "sandbox",
+      "config"
+    ],
+    "sandboxField": "sandbox",
+    "sandboxType": "SandboxMode",
+    "structuredSandboxPolicyField": null,
+    "readOnlyNetworkConfigField": null,
+    "workspaceWriteConfigField": "sandbox_workspace_write",
+    "readOnlyDefault": {
+      "type": "readOnly",
+      "networkAccess": false
+    }
+  },
+  "turnStart": {
+    "method": "turn/start",
+    "structuredSandboxPolicyField": "sandboxPolicy",
+    "appliesTo": "current-and-subsequent-turns"
+  }
+}

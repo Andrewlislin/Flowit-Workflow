@@ -116,13 +116,30 @@ A grant is never accepted from ordinary MCP tool arguments. It is issued only af
 
 ## Host verification
 
-Codex `thread/start` and `thread/resume` responses report the active approval and sandbox policy. Flowit compares the Host response with the approved envelope.
+Codex `thread/start` and `thread/resume` responses report the active approval and sandbox policy. Flowit compares that lifecycle state with the approved envelope before any task turn begins.
 
-If the Host returns a weaker, broader or structurally different policy, Flowit fails closed. A newly created managed Session is archived before a Run is admitted whenever a policy mismatch can be identified safely.
+The stable Codex App Server v0.152.0 lifecycle request accepts `sandbox: SandboxMode` plus generic configuration. It has a typed `sandbox_workspace_write` configuration, but no stable field that can encode `readOnly(networkAccess=true)`. The full structured `SandboxPolicy` belongs to `turn/start`.
 
-Every `turn/start` repeats the full bounded `sandboxPolicy`; later Pipeline nodes cannot silently drift to another permission profile.
+Flowit therefore separates two checks:
 
-For both `readOnly` and `workspaceWrite`, `networkAccess` is an exact field: a Host response that is either broader or narrower than the approved value is rejected. `thread/start`, every permission-bound `thread/read` (including executable probing and post-turn readback), and `thread/resume` must report the exact approved `dedicatedCwd`. A mismatch keeps the deterministic `PERMISSION_UNAVAILABLE` classification instead of being wrapped as a retryable Host outage. If an exact model is rerouted, Flowit immediately interrupts that specific turn rather than waiting for the replacement model to finish and applying a post-hoc error.
+```text
+thread/start / thread/resume
+→ approvalPolicy must remain exactly never
+→ sandbox type must match
+→ lifecycle policy must never be broader than the grant
+→ workspaceWrite remains exact because the stable config can express it
+→ approved readOnly(networkAccess=true) may bootstrap as readOnly(false)
+
+turn/start
+→ send the complete exact approved sandboxPolicy
+→ no task work begins before this request
+```
+
+A newly created managed Session is archived before Run admission if its lifecycle is broader or structurally incompatible. Every `turn/start` repeats the complete approved `sandboxPolicy`, so read-only network access is enabled only at the execution boundary and later Pipeline nodes cannot silently drift.
+
+`thread/start`, every permission-bound `thread/read` (including executable probing and post-turn readback), and `thread/resume` must still report the exact approved `dedicatedCwd`. A mismatch keeps the deterministic `PERMISSION_UNAVAILABLE` classification instead of being wrapped as a retryable Host outage. If an exact model is rerouted, Flowit immediately interrupts that specific turn rather than waiting for the replacement model to finish and applying a post-hoc error.
+
+The Host contract suite pins the relevant upstream v0.152.0 schema facts in `tests/fixtures/codex-app-server-v0.152.0-sandbox-contract.json`; the fake Host derives lifecycle state from the outbound request instead of being injected with the expected answer.
 
 Execution evidence records the requested and granted capabilities, sandbox mode, network flag, writable roots, grant source and envelope digest. This allows `run_once_get` and durable node checkpoints to distinguish user approval from model intent and Host enforcement.
 
@@ -131,16 +148,17 @@ Execution evidence records the requested and granted capabilities, sandbox mode,
 The Host contract suite preserves the execution-side invariants independently of grant signing:
 
 ```text
-readOnly offline approved → Host reports network on  → reject and archive
-readOnly online approved  → Host reports network off → reject and archive
-approved dedicatedCwd     → thread/start cwd drifts   → reject before Run admission
-approved dedicatedCwd     → any thread/read drifts    → reject before Skills or turn/start
-approved dedicatedCwd     → thread/resume cwd drifts  → reject before turn/start
-exact model X             → Host reroutes X to Y      → interrupt the exact turn before completion
-journaled Session cwd      → differs after restart     → refuse recovery admission
+readOnly offline approved → lifecycle reports network on → reject and archive
+readOnly online approved  → lifecycle reports network off → accept narrower bootstrap
+readOnly online approved  → first turn omits exact online policy → contract test fails
+approved dedicatedCwd     → thread/start cwd drifts → reject before Run admission
+approved dedicatedCwd     → any thread/read drifts → reject before Skills or turn/start
+approved dedicatedCwd     → thread/resume cwd drifts → reject before turn/start
+exact model X             → Host reroutes X to Y → interrupt the exact turn before completion
+journaled Session cwd      → differs after restart → refuse recovery admission
 ```
 
-These checks are exact rather than minimum-capability checks. A Host response that is broader or narrower than what the user approved is not silently accepted.
+The lifecycle check is no-broader-than-approved where the stable protocol cannot express the full envelope. The actual task boundary remains exact: every turn carries the complete user-approved structured policy.
 
 ## Failure behavior
 

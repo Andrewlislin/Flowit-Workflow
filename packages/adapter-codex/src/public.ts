@@ -201,7 +201,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
       )
     }
     try {
-      assertHostPolicy(response, permissions, 'thread/start')
+      assertHostLifecyclePolicy(response, permissions, 'thread/start')
       const cwd = assertHostCwd(response, permissions, 'thread/start')
       const runtime = runtimeFromHostResponse(response, request.requirement.runtime)
       assertRuntimeMatch(request.requirement.runtime, runtime)
@@ -297,7 +297,7 @@ export class CodexAgentAdapter extends BaseCodexAgentAdapter {
     } catch (error: unknown) {
       throw contextualizeProtocolError(error, 'Codex thread/resume rejected the approved permission envelope')
     }
-    assertHostPolicy(resumed, permissions, 'thread/resume')
+    assertHostLifecyclePolicy(resumed, permissions, 'thread/resume')
     const thread = resumed?.thread ?? resumed
     if (isThreadRunning(thread)) {
       throw new AgentExecutionError(
@@ -780,6 +780,10 @@ function threadOverrides(
 function sandboxConfig(
   permissions: CodexAdapterPermissionEvidence,
 ): Record<string, unknown> {
+  // Stable App Server v2 exposes a typed lifecycle config only for
+  // workspace-write. A network-enabled read-only grant is applied exactly at
+  // turn/start through sandboxPolicy; the preceding lifecycle may therefore
+  // report the narrower built-in readOnly(networkAccess=false) policy.
   if (permissions.sandboxPolicy.type !== 'workspaceWrite') return {}
   return {
     sandbox_workspace_write: {
@@ -791,7 +795,7 @@ function sandboxConfig(
   }
 }
 
-function assertHostPolicy(
+function assertHostLifecyclePolicy(
   response: any,
   permissions: CodexAdapterPermissionEvidence,
   operation: string,
@@ -819,26 +823,42 @@ function assertHostPolicy(
       false,
     )
   }
-  if (actual.networkAccess !== expected.networkAccess) {
+  if (typeof actual.networkAccess !== 'boolean') {
     throw new AgentExecutionError(
-      'PERMISSION_UNAVAILABLE',
-      `${operation} returned networkAccess ${JSON.stringify(actual.networkAccess)} instead of ${expected.networkAccess}`,
+      'HOST_VERSION_INCOMPATIBLE',
+      `${operation} did not report a boolean networkAccess value`,
       false,
     )
   }
-  if (expected.type === 'workspaceWrite') {
-    if (
-      actual.networkAccess !== expected.networkAccess ||
-      canonicalStrings(actual.writableRoots) !== canonicalStrings(expected.writableRoots) ||
-      actual.excludeTmpdirEnvVar !== true ||
-      actual.excludeSlashTmp !== true
-    ) {
+
+  if (expected.type === 'readOnly') {
+    // Stable thread/start and thread/resume accept only SandboxMode and cannot
+    // encode readOnly(networkAccess=true). Their built-in read-only state is
+    // offline. Accept that narrower, non-executing bootstrap only when the
+    // user approved online read-only; reject every broader lifecycle state.
+    if (!expected.networkAccess && actual.networkAccess) {
       throw new AgentExecutionError(
         'PERMISSION_UNAVAILABLE',
-        `${operation} returned a workspace sandbox that differs from the approved Flowit envelope`,
+        `${operation} returned networkAccess true for an offline read-only grant`,
         false,
       )
     }
+    return
+  }
+
+  // workspaceWrite has a stable typed lifecycle config, so retain exact
+  // verification for network, roots, and temporary-directory restrictions.
+  if (
+    actual.networkAccess !== expected.networkAccess ||
+    canonicalStrings(actual.writableRoots) !== canonicalStrings(expected.writableRoots) ||
+    actual.excludeTmpdirEnvVar !== true ||
+    actual.excludeSlashTmp !== true
+  ) {
+    throw new AgentExecutionError(
+      'PERMISSION_UNAVAILABLE',
+      `${operation} returned a workspace sandbox that differs from the approved Flowit envelope`,
+      false,
+    )
   }
 }
 
