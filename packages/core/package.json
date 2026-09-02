@@ -1,6 +1,6 @@
 {
   "name": "@coaseedgeltd/flowit-core",
-  "version": "0.5.0-beta.3",
+  "version": "0.5.0-beta.4",
   "description": "Host-agnostic durable orchestration core for Flowit Workflow.",
   "license": "Apache-2.0",
   "type": "module",

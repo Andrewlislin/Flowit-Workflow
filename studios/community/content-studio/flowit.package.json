@@ -5,7 +5,7 @@
   "description": "发现热点 → 选择题目 → 研究资料 → 写作 → 查事实 → 主编审核。",
   "publisher": { "id": "coaseedge", "displayName": "CoaseEdge / 高斯边界" },
   "version": "1.0.0",
-  "runtime": { "id": "flowit-workflow", "version": ">=0.5.0-beta.3 <2", "bootstrap": "official" },
+  "runtime": { "id": "flowit-workflow", "version": ">=0.5.0-beta.4 <2", "bootstrap": "official" },
   "supportedHosts": ["workbuddy", "claude-code", "codex", "opencode", "dsh", "doubao-office"],
   "entryPreset": "content-studio",
   "license": { "type": "open-source", "notice": "Community Studio distributed under the repository Apache-2.0 license." },
