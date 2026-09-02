@@ -64,6 +64,14 @@ WorkBuddy、Claude Code、Codex、OpenCode、DeepSeek Harness、豆包办公等 
 
 它**不会替代** Agent 自己的模型、登录、权限、沙箱、工作区信任或工具授权。真正执行工作的仍然是你选择的 Agent；自适应编排也不会把“模型建议”变成新的权限来源。
 
+## 用浮域创建自己的 AI 工作室
+
+你不仅可以使用浮域，也可以基于免费的 Flowit Studio 创作工具，把自己的专业方法封装成可验证、可安装、可分发，并由浮域承载的 AI 工作室。
+
+浮域负责工作流 Runtime、多 Agent 协作、调度、恢复和 Host 集成；Creator 专注于角色、方法、流程和交付标准。
+
+[10 分钟创建第一个 Studio](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/quickstart.md) · [Build with Flowit](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/README.md) · [查看开发示例](https://github.com/Andrewlislin/Flowit-Workflow/tree/main/examples/studios)
+
 ## 什么时候值得用浮域？
 
 如果只是改一封邮件、总结一个 PDF、解释一个函数、修一个很小的 bug，直接用 WorkBuddy / Claude Code / Codex 通常更简单。
@@ -380,7 +388,7 @@ Core 保存工作流事实、run snapshot 和引用；路由层决定“这次�
 
 详细执行模型见 [docs/architecture.md](docs/architecture.md)，自适应路由协议见 [docs/adaptive-routing.md](docs/adaptive-routing.md)。
 
-## 开发者入口
+## 参与 Flowit Workflow 开发
 
 ```bash
 pnpm install
@@ -393,6 +401,7 @@ pnpm build
 
 ## 更多文档
 
+- [Build with Flowit：用浮域创建 AI 工作室](https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/studio/README.md)
 - [安装、Doctor、Repair、Uninstall](docs/setup.md)
 - [自适应编排与可信路由](docs/adaptive-routing.md)
 - [内置工作模式与定时激活](docs/presets.md)
