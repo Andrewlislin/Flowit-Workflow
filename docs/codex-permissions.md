@@ -126,6 +126,21 @@ For both `readOnly` and `workspaceWrite`, `networkAccess` is an exact field: a H
 
 Execution evidence records the requested and granted capabilities, sandbox mode, network flag, writable roots, grant source and envelope digest. This allows `run_once_get` and durable node checkpoints to distinguish user approval from model intent and Host enforcement.
 
+## Review regression gates
+
+The Host contract suite preserves the execution-side invariants independently of grant signing:
+
+```text
+readOnly offline approved → Host reports network on  → reject and archive
+readOnly online approved  → Host reports network off → reject and archive
+approved dedicatedCwd     → thread/start cwd drifts   → reject before Run admission
+approved dedicatedCwd     → thread/read/resume drifts → reject before Skills or turn/start
+exact model X             → Host reroutes X to Y      → interrupt the exact turn before completion
+journaled Session cwd      → differs after restart     → refuse recovery admission
+```
+
+These checks are exact rather than minimum-capability checks. A Host response that is broader or narrower than what the user approved is not silently accepted.
+
 ## Failure behavior
 
 | Condition | Result |
