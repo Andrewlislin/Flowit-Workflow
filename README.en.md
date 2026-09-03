@@ -189,7 +189,7 @@ CLI: flowit-workflow
 
 | Host | Flowit integration | Good ordinary-user scenarios | Important boundary |
 | --- | --- | --- | --- |
-| **WorkBuddy** | MCP + Hooks + Bridge / Managed Driver | Daily briefs, web research, office automation, GUI work | Desktop Bridge needs a WorkBuddy Automation to invoke the Worker periodically |
+| **WorkBuddy** | MCP + Hooks + Bridge / Managed Driver | Daily briefs, web research, office automation, GUI work | [Desktop Bridge](docs/workbuddy-desktop-bridge.md) is on-demand only; unattended use requires an event-driven Managed Driver, not model-powered polling |
 | **Claude Code** | skills-directory Plugin + Hooks + MCP | Technical research, long documents, large refactors | Project scope still obeys Claude workspace-trust and MCP approval |
 | **Codex** | App Server v2 + MCP config | Implementation, tests, code review | Codex sandbox and approval boundaries remain authoritative |
 | **OpenCode V2** | Official V2 SDK / HTTP Server | Nightly code checks and development workflows | Flowit does not silently launch an OpenCode server |

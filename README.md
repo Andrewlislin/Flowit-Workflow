@@ -255,7 +255,7 @@ CLI: flowit-workflow
 
 | Host | 浮域集成方式 | 普通用户最适合的场景 | 仍需注意 |
 | --- | --- | --- | --- |
-| **WorkBuddy** | MCP + Hooks + Bridge / Managed Driver | 日报、网页研究、办公自动化、GUI 操作 | Desktop Bridge 需要 WorkBuddy 原生 Automation 周期调用 Worker |
+| **WorkBuddy** | MCP + Hooks + Bridge / Managed Driver | 日报、网页研究、办公自动化、GUI 操作 | [Desktop Bridge](docs/workbuddy-desktop-bridge.md) 只支持有真实请求时按需调用；无人值守需要事件驱动 Managed Driver，禁止模型定时空轮询 |
 | **Claude Code** | skills-directory Plugin + UserPromptSubmit / PreToolUse Hooks + MCP | 自适应编排、技术研究、长文档、大型重构 | Adaptive routing 会绑定真实 Claude Session；项目 scope 仍受 workspace trust / MCP approval 控制 |
 | **Codex** | App Server v2 + MCP config | 实现、测试、代码 Review | 保留 Codex 自身 sandbox / approval 边界 |
 | **OpenCode V2** | 官方 V2 SDK / HTTP Server | 夜间代码检查、开发流程 | 浮域不会偷偷启动 OpenCode Server |

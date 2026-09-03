@@ -69,11 +69,13 @@ The provider configures four machine-side integration layers:
 
 The provider writes an ownership manifest so a later upgrade, repair, or uninstall can distinguish installer-owned values from user edits. Existing same-name values that conflict with the desired installer configuration block automatic setup instead of being overwritten. Applying a stale plan also fails if the target config changed after planning.
 
-### Desktop Bridge limitation
+### Desktop Bridge execution boundary
 
-Flowit can install every local file needed by the WorkBuddy Desktop Bridge, but WorkBuddy currently exposes no public API for a third-party installer to create or modify a native WorkBuddy Automation. Therefore desktop setup returns an explicit manual step for unattended execution: enable one WorkBuddy Automation that periodically invokes the installed **Flowit Workflow Bridge Worker** Skill.
+Flowit can install every local file needed by the WorkBuddy Desktop Bridge, but it does not treat a recurring WorkBuddy Automation as a safe queue worker. A native Automation creates a model task before the Bridge Worker can inspect the inbox, so periodic polling creates visible WorkBuddy sessions and consumes model quota even when the inbox is empty.
 
-If `FLOWIT_WORKFLOW_WORKBUDDY_DRIVER` is configured, the managed-agent-driver path does not require the desktop polling Automation.
+Without `FLOWIT_WORKFLOW_WORKBUDDY_DRIVER`, Desktop Bridge execution is therefore **on-demand only**: invoke the installed **Flowit Workflow Bridge Worker** Skill once after a real Flowit request has been queued. Do not attach the Worker to a recurring Automation. For unattended execution, configure a trusted event-driven Managed Driver that starts WorkBuddy only when actual work exists. See [WorkBuddy Desktop Bridge execution safety](workbuddy-desktop-bridge.md).
+
+Setup reports this as `manual-action-required`; installed MCP, Skill, Hooks, and Bridge directories do not by themselves prove unattended execution readiness.
 
 ### WorkBuddy uninstall semantics
 

@@ -144,8 +144,20 @@ export function workBuddySetupPaths(
 export function workBuddyManualSteps(context: HostSetupContext): string[] {
   const steps = ['Restart/reload WorkBuddy after setup so MCP, Skills, and lifecycle Hooks are reloaded.']
   if (requiresDesktopAutomation(context)) {
+    const codeBuddyRoot = context.env.CODEBUDDY_CONFIG_DIR?.trim()
+      ? path.resolve(context.env.CODEBUDDY_CONFIG_DIR)
+      : path.join(context.homeDir, '.codebuddy')
+    const skillFile = path.join(
+      codeBuddyRoot,
+      'skills',
+      WORKBUDDY_SKILL_NAME,
+      'SKILL.md',
+    )
     steps.unshift(
-      'For unattended Desktop Bridge execution, enable one WorkBuddy native Automation that periodically invokes the installed “Flowit Workflow Bridge Worker” Skill. WorkBuddy currently exposes no public Automation write API for the installer to call safely.',
+      'Pause or remove any recurring WorkBuddy Automation that invokes the Flowit Workflow Bridge Worker. A native Automation creates a model task before the Worker can discover that the inbox is empty, so periodic polling creates empty sessions and consumes WorkBuddy quota.',
+      'For interactive Desktop Bridge use, invoke the Worker once only after a real Flowit request has been queued. For unattended execution, configure FLOWIT_WORKFLOW_WORKBUDDY_DRIVER as a trusted event-driven managed driver. Do not use a model-powered recurring inbox poller.',
+      `The installer-managed user Skill is ${skillFile}; it is not under ~/.workbuddy/skills/. Project scope uses <project>/.codebuddy/skills/${WORKBUDDY_SKILL_NAME}/SKILL.md.`,
+      'Operational guidance: https://github.com/Andrewlislin/Flowit-Workflow/blob/main/docs/workbuddy-desktop-bridge.md',
     )
   }
   return steps
@@ -267,17 +279,34 @@ export function workBuddyDoctorChecks(
       ? {}
       : { detail: state.bridgeMissing.join(', '), repairable: true }),
   })
+  const modelPollingRequired = requiresDesktopAutomation(context)
   checks.push(
-    requiresDesktopAutomation(context)
+    modelPollingRequired
       ? {
           id: 'worker-execution',
           status: 'warning',
-          summary: 'Desktop Bridge worker Automation cannot be provisioned through a public WorkBuddy API',
-          detail: 'Enable one WorkBuddy native Automation that periodically invokes the installed Flowit Workflow Bridge Worker Skill. Interactive/manual Skill invocation also works.',
+          summary: 'No event-driven managed WorkBuddy driver is configured',
+          detail: 'Desktop Bridge requests can be processed only by an on-demand Worker invocation. Configure FLOWIT_WORKFLOW_WORKBUDDY_DRIVER for unattended execution.',
           repairable: false,
         }
       : { id: 'worker-execution', status: 'ok', summary: 'Managed WorkBuddy driver is configured' },
   )
+  checks.push(
+    modelPollingRequired
+      ? {
+          id: 'model-polling-safety',
+          status: 'warning',
+          summary: 'Recurring model-powered WorkBuddy inbox polling is unsupported',
+          detail: 'Do not attach the Bridge Worker Skill to a recurring WorkBuddy Automation. WorkBuddy creates a model task before inbox inspection, so an empty poll still creates a visible session and consumes quota. Pause existing recurring Bridge Worker Automations; use on-demand invocation or an event-driven managed driver.',
+          repairable: false,
+        }
+      : {
+          id: 'model-polling-safety',
+          status: 'ok',
+          summary: 'Event-driven WorkBuddy dispatch avoids empty model polling',
+        },
+  )
+
   return checks
 }
 
