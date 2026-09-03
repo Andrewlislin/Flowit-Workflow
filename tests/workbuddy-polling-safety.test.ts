@@ -123,3 +123,22 @@ test('Bridge Worker is on-demand and forbids simulated Flowit fallback', async (
     /For unattended desktop operation, bind this Skill to a WorkBuddy native Automation/i,
   )
 })
+
+
+test('public WorkBuddy guidance rejects recurring model polling', async () => {
+  const [readme, readmeEn, setup] = await Promise.all([
+    readFile(path.join(process.cwd(), 'README.md'), 'utf8'),
+    readFile(path.join(process.cwd(), 'README.en.md'), 'utf8'),
+    readFile(path.join(process.cwd(), 'docs', 'setup.md'), 'utf8'),
+  ])
+  for (const document of [readme, readmeEn, setup]) {
+    assert.doesNotMatch(
+      document,
+      /enable one WorkBuddy native Automation that periodically invokes/i,
+    )
+  }
+  assert.match(readme, /禁止模型定时空轮询/)
+  assert.match(readmeEn, /not model-powered polling/)
+  assert.match(setup, /Desktop Bridge execution is therefore \*\*on-demand only\*\*/)
+  assert.match(setup, /workbuddy-desktop-bridge\.md/)
+})

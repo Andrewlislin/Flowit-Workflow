@@ -279,33 +279,33 @@ export function workBuddyDoctorChecks(
       ? {}
       : { detail: state.bridgeMissing.join(', '), repairable: true }),
   })
-const modelPollingRequired = requiresDesktopAutomation(context)
-checks.push(
-  modelPollingRequired
-    ? {
-        id: 'worker-execution',
-        status: 'warning',
-        summary: 'No event-driven managed WorkBuddy driver is configured',
-        detail: 'Desktop Bridge requests can be processed only by an on-demand Worker invocation. Configure FLOWIT_WORKFLOW_WORKBUDDY_DRIVER for unattended execution.',
-        repairable: false,
-      }
-    : { id: 'worker-execution', status: 'ok', summary: 'Managed WorkBuddy driver is configured' },
-)
-checks.push(
-  modelPollingRequired
-    ? {
-        id: 'model-polling-safety',
-        status: 'warning',
-        summary: 'Recurring model-powered WorkBuddy inbox polling is unsupported',
-        detail: 'Do not attach the Bridge Worker Skill to a recurring WorkBuddy Automation. WorkBuddy creates a model task before inbox inspection, so an empty poll still creates a visible session and consumes quota. Pause existing recurring Bridge Worker Automations; use on-demand invocation or an event-driven managed driver.',
-        repairable: false,
-      }
-    : {
-        id: 'model-polling-safety',
-        status: 'ok',
-        summary: 'Event-driven WorkBuddy dispatch avoids empty model polling',
-      },
-)
+  const modelPollingRequired = requiresDesktopAutomation(context)
+  checks.push(
+    modelPollingRequired
+      ? {
+          id: 'worker-execution',
+          status: 'warning',
+          summary: 'No event-driven managed WorkBuddy driver is configured',
+          detail: 'Desktop Bridge requests can be processed only by an on-demand Worker invocation. Configure FLOWIT_WORKFLOW_WORKBUDDY_DRIVER for unattended execution.',
+          repairable: false,
+        }
+      : { id: 'worker-execution', status: 'ok', summary: 'Managed WorkBuddy driver is configured' },
+  )
+  checks.push(
+    modelPollingRequired
+      ? {
+          id: 'model-polling-safety',
+          status: 'warning',
+          summary: 'Recurring model-powered WorkBuddy inbox polling is unsupported',
+          detail: 'Do not attach the Bridge Worker Skill to a recurring WorkBuddy Automation. WorkBuddy creates a model task before inbox inspection, so an empty poll still creates a visible session and consumes quota. Pause existing recurring Bridge Worker Automations; use on-demand invocation or an event-driven managed driver.',
+          repairable: false,
+        }
+      : {
+          id: 'model-polling-safety',
+          status: 'ok',
+          summary: 'Event-driven WorkBuddy dispatch avoids empty model polling',
+        },
+  )
 
   return checks
 }
