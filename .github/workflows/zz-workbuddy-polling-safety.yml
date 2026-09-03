@@ -26,7 +26,20 @@ jobs:
           node-version: 24
 
       - name: Apply the reviewed WorkBuddy safety changes
-        run: python3 .github/scripts/apply-workbuddy-polling-fix.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/apply-workbuddy-polling-fix.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('tests/workbuddy-polling-safety.test.ts')
+          value = path.read_text(encoding='utf-8')
+          broken = "join('" + chr(10) + "')"
+          fixed = "join('\\n')"
+          if broken not in value:
+              raise SystemExit('generated WorkBuddy test did not contain the expected newline literal defect')
+          path.write_text(value.replace(broken, fixed), encoding='utf-8')
+          PY
 
       - name: Validate the full repository gate
         shell: bash
